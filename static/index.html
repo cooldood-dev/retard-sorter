@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Retard Sorter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="bg-video-wrap">
+  <video autoplay muted loop playsinline id="bg-video">
+    <source src="/assets/background.mp4" type="video/mp4">
+  </video>
+</div>
+<div id="root">
+  <aside id="sidebar">
+    <div class="sidebar-brand">
+      <img class="brand-mark" id="brandImg" src="/assets/logo.gif" alt="RS">
+      <div id="brandFallback" class="brand-mark brand-fallback" style="display:none">RS</div>
+      <div class="brand-text">
+        <span class="brand-name">Retard Sorter</span>
+        <span class="brand-version">v1.0.0</span>
+      </div>
+    </div>
+    <nav id="nav">
+      <a class="nav-item active" data-page="dashboard" href="#" onclick="navigate('dashboard');return false">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+        Dashboard
+      </a>
+      <a class="nav-item" data-page="filters" href="#" onclick="navigate('filters');return false">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M6 12h12"/><path d="M8 18h8"/></svg>
+        Filters
+      </a>
+      <a class="nav-item" data-page="run" href="#" onclick="navigate('run');return false">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Run Sorter
+      </a>
+      <a class="nav-item" data-page="history" href="#" onclick="navigate('history');return false">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        History
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <span id="filterCount">0 domains</span>
+    </div>
+  </aside>
+
+  <main id="content">
+
+    <!-- DASHBOARD -->
+    <section id="page-dashboard" class="page active">
+      <header class="page-head">
+        <div>
+          <h1 class="page-title">Dashboard</h1>
+          <p class="page-subtitle" id="dashSubtitle">Overview of all sorting activity</p>
+        </div>
+        <button class="btn btn-primary" onclick="navigate('run')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          New Sort
+        </button>
+      </header>
+
+      <div class="metric-grid" id="metricGrid">
+        <div class="metric-card">
+          <div class="metric-value" id="statFilters">—</div>
+          <div class="metric-label">Filter domains</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="statRuns">—</div>
+          <div class="metric-label">Total runs</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="statFiles">—</div>
+          <div class="metric-label">Files scanned</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value" id="statHits">—</div>
+          <div class="metric-label">Total hits</div>
+        </div>
+      </div>
+
+      <div class="panel" id="recentPanel">
+        <h3 class="panel-title">Recent runs</h3>
+        <div id="recentList" class="skeleton-list">
+          <div class="skeleton-row"></div>
+          <div class="skeleton-row"></div>
+          <div class="skeleton-row"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FILTERS -->
+    <section id="page-filters" class="page">
+      <header class="page-head">
+        <div>
+          <h1 class="page-title">Filters</h1>
+          <p class="page-subtitle" id="filterSubtitle">0 target domains configured</p>
+        </div>
+        <div class="head-actions">
+          <button class="btn btn-secondary" onclick="showImportModal()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Import
+          </button>
+          <button class="btn btn-primary" onclick="showAddFilterModal()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add domain
+          </button>
+        </div>
+      </header>
+
+      <div class="panel">
+        <div class="filter-toolbar">
+          <div class="search-wrap">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="filterSearch" placeholder="Search domains..." oninput="renderFilters()">
+          </div>
+          <div class="filter-toolbar-actions">
+            <button class="btn btn-ghost btn-sm" onclick="clearAllFilters()" id="clearFiltersBtn" style="display:none">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              Clear all
+            </button>
+          </div>
+        </div>
+        <div id="filterList" class="filter-list">
+          <p class="empty-state">No domains configured. Add one to get started.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- RUN -->
+    <section id="page-run" class="page">
+      <header class="page-head">
+        <div>
+          <h1 class="page-title">Run Sorter</h1>
+          <p class="page-subtitle">Process cookie files against target domains</p>
+        </div>
+      </header>
+
+      <div class="panel">
+        <div class="form-group">
+          <label for="runSourceDir">Source directory</label>
+          <p class="form-hint">Full path to the folder containing Netscape cookie files</p>
+          <input type="text" id="runSourceDir" placeholder="C:\Users\user\cookies\input">
+        </div>
+
+        <div class="form-group">
+          <label>Active filters</label>
+          <div id="runFilterSummary" class="tag-list"></div>
+        </div>
+
+        <button class="btn btn-primary btn-lg" id="startRunBtn" onclick="startRun()">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Start sorting
+        </button>
+      </div>
+
+      <div class="panel" id="runProgressPanel" style="display:none">
+        <h3 class="panel-title">Processing</h3>
+        <div class="progress-track">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+        <div class="progress-meta">
+          <span id="progressFiles">0 / 0 files</span>
+          <span id="progressHits">0 hits</span>
+          <span id="progressStatus">Initializing...</span>
+        </div>
+      </div>
+
+      <div class="panel" id="runResultPanel" style="display:none">
+        <h3 class="panel-title">Run complete</h3>
+        <div id="runSummary" class="summary-block"></div>
+      </div>
+    </section>
+
+    <!-- HISTORY -->
+    <section id="page-history" class="page">
+      <header class="page-head">
+        <div>
+          <h1 class="page-title">History</h1>
+          <p class="page-subtitle">All previous sorting runs</p>
+        </div>
+      </header>
+
+      <div class="panel" id="historyPanel">
+        <div id="historyList" class="skeleton-list">
+          <div class="skeleton-row"></div>
+          <div class="skeleton-row"></div>
+          <div class="skeleton-row"></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<div id="modal" class="modal-mask" style="display:none" onclick="closeModal()">
+  <div class="modal-panel" onclick="event.stopPropagation()">
+    <div class="modal-head">
+      <h3 id="modalTitle">Modal</h3>
+      <button class="modal-x" onclick="closeModal()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div id="modalBody" class="modal-content"></div>
+    <div id="modalFooter" class="modal-foot"></div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
