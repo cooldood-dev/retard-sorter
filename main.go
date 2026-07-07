@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -1000,11 +1001,11 @@ func mustJSON(v interface{}) string {
 func openBrowser(url string) {
 	var cmd string
 	var args []string
-	switch {
-	case len(os.Getenv("DISPLAY")) > 0:
-		cmd = "xdg-open"
-	case len(os.Getenv("TERM_PROGRAM")) > 0:
+	switch runtime.GOOS {
+	case "darwin":
 		cmd = "open"
+	case "linux":
+		cmd = "xdg-open"
 	default:
 		cmd = "cmd"
 		args = []string{"/c", "start", url}
