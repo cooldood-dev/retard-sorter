@@ -2,7 +2,6 @@ package main
 
 import (
 	"archive/zip"
-	"bufio"
 	"bytes"
 	"crypto/tls"
 	"embed"
@@ -24,7 +23,7 @@ import (
 	"github.com/nwaples/rardecode"
 )
 
-const Version = "1.5.0"
+const Version = "1.5.1"
 
 //go:embed static/*
 var staticFiles embed.FS
@@ -230,15 +229,13 @@ var DefaultFilters = []string{
 }
 
 func parseNetscapeCookieFile(path string) ([]Cookie, error) {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
 	var cookies []Cookie
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+	for _, rawLine := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(rawLine)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
 			continue
 		}
@@ -258,7 +255,7 @@ func parseNetscapeCookieFile(path string) ([]Cookie, error) {
 			cookies[len(cookies)-1].Value += "\n" + line
 		}
 	}
-	return cookies, scanner.Err()
+	return cookies, nil
 }
 
 func cookieMatchesAnyDomain(c Cookie, targets []string) string {
@@ -341,21 +338,20 @@ func validateProxies(mode string) (valid, invalid int) {
 			invalid++
 			continue
 		}
-		c := &http.Client{
-			Transport: &http.Transport{
-				Proxy:           http.ProxyURL(p),
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
-			Timeout: 8 * time.Second,
+		transport := &http.Transport{
+			Proxy:           http.ProxyURL(p),
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		}
+		c := &http.Client{Transport: transport, Timeout: 15 * time.Second}
 		resp, err := c.Get(testURL)
 		if err != nil {
 			invalid++
-			c.CloseIdleConnections()
+			transport.CloseIdleConnections()
 			continue
 		}
+		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
-		c.CloseIdleConnections()
+		transport.CloseIdleConnections()
 		valid++
 	}
 	return
