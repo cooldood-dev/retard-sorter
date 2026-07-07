@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Retard Sorter</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -15,112 +15,108 @@
   </video>
 </div>
 <div id="root">
-  <aside id="sidebar">
-    <div class="sidebar-brand">
-      <img class="brand-mark" id="brandImg" src="/assets/logo.gif" alt="RS">
-      <div id="brandFallback" class="brand-mark brand-fallback" style="display:none">RS</div>
-      <div class="brand-text">
-        <span class="brand-name">Retard Sorter</span>
-        <span class="brand-version">v1.0.0</span>
-      </div>
-    </div>
-    <nav id="nav">
-      <a class="nav-item active" data-page="dashboard" href="#" onclick="navigate('dashboard');return false">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
-        Dashboard
-      </a>
-      <a class="nav-item" data-page="filters" href="#" onclick="navigate('filters');return false">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M6 12h12"/><path d="M8 18h8"/></svg>
-        Filters
-      </a>
-      <a class="nav-item" data-page="run" href="#" onclick="navigate('run');return false">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-        Run Sorter
-      </a>
-      <a class="nav-item" data-page="history" href="#" onclick="navigate('history');return false">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-        History
-      </a>
-    </nav>
-    <div class="sidebar-footer">
-      <span id="filterCount">0 domains</span>
-    </div>
-  </aside>
 
+  <!-- TOP BAR -->
+  <header id="topbar">
+    <div class="topbar-left">
+      <a class="brand-link" href="#" onclick="navigate('dashboard');return false">
+        <img class="topbar-logo" id="brandImg" src="/assets/logo.gif" alt="RS" onerror="this.style.display='none';document.getElementById('brandFallbackTop').style.display='flex'">
+        <div id="brandFallbackTop" class="topbar-logo topbar-logo-fallback" style="display:none">RS</div>
+        <span class="topbar-title">Retard Sorter</span>
+      </a>
+          <span class="topbar-version">v1.5.0</span>
+    </div>
+    <div class="topbar-right">
+      <span class="credits-pill">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+        <span id="statHitsBadge">0</span> hits
+      </span>
+    </div>
+  </header>
+
+  <!-- MAIN CONTENT -->
   <main id="content">
 
     <!-- DASHBOARD -->
     <section id="page-dashboard" class="page active">
-      <header class="page-head">
-        <div>
-          <h1 class="page-title">Dashboard</h1>
-          <p class="page-subtitle" id="dashSubtitle">Overview of all sorting activity</p>
-        </div>
-        <button class="btn btn-primary" onclick="navigate('run')">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-          New Sort
-        </button>
-      </header>
+      <div class="page-heading">
+        <h1>Welcome back,</h1>
+        <p class="page-subtext" id="dashSubtext">Overview of all sorting activity</p>
+      </div>
 
       <div class="metric-grid" id="metricGrid">
-        <div class="metric-card">
+        <div class="card metric-card">
           <div class="metric-value" id="statFilters">—</div>
           <div class="metric-label">Filter domains</div>
         </div>
-        <div class="metric-card">
+        <div class="card metric-card">
           <div class="metric-value" id="statRuns">—</div>
           <div class="metric-label">Total runs</div>
         </div>
-        <div class="metric-card">
+        <div class="card metric-card">
           <div class="metric-value" id="statFiles">—</div>
           <div class="metric-label">Files scanned</div>
         </div>
-        <div class="metric-card">
+        <div class="card metric-card">
           <div class="metric-value" id="statHits">—</div>
           <div class="metric-label">Total hits</div>
         </div>
       </div>
 
-      <div class="panel" id="recentPanel">
-        <h3 class="panel-title">Recent runs</h3>
-        <div id="recentList" class="skeleton-list">
-          <div class="skeleton-row"></div>
-          <div class="skeleton-row"></div>
-          <div class="skeleton-row"></div>
+      <div class="card-row">
+        <div class="card">
+          <h3 class="card-title">Recent runs</h3>
+          <div id="recentList"><div class="list-skeleton"><div></div><div></div><div></div></div></div>
+        </div>
+        <div class="card">
+          <h3 class="card-title">Quick actions</h3>
+          <div class="action-list">
+            <div class="list-item" onclick="navigate('run')">
+              <div class="list-radio"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></div>
+              <div class="list-body">
+                <div class="list-title">New sort run</div>
+                <div class="list-sub">Process cookie files against target domains</div>
+              </div>
+              <svg class="list-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </div>
+            <div class="list-item" onclick="navigate('filters')">
+              <div class="list-radio"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M6 12h12"/><path d="M8 18h8"/></svg></div>
+              <div class="list-body">
+                <div class="list-title">Manage filters</div>
+                <div class="list-sub">Add or remove target domains</div>
+              </div>
+              <svg class="list-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </div>
+            <div class="list-item" onclick="document.getElementById('importPicker').click()">
+              <div class="list-radio"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div>
+              <div class="list-body">
+                <div class="list-title">Import archive</div>
+                <div class="list-sub">Upload a .zip or .rar of cookie files</div>
+              </div>
+              <svg class="list-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </div>
+          </div>
         </div>
       </div>
     </section>
 
     <!-- FILTERS -->
     <section id="page-filters" class="page">
-      <header class="page-head">
-        <div>
-          <h1 class="page-title">Filters</h1>
-          <p class="page-subtitle" id="filterSubtitle">0 target domains configured</p>
-        </div>
-        <div class="head-actions">
-          <button class="btn btn-secondary" onclick="showImportModal()">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            Import
-          </button>
-          <button class="btn btn-primary" onclick="showAddFilterModal()">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            Add domain
-          </button>
-        </div>
-      </header>
+      <div class="page-heading">
+        <h1>Filters</h1>
+        <p class="page-subtext" id="filterSubtext">0 target domains configured</p>
+      </div>
 
-      <div class="panel">
+      <div class="card">
         <div class="filter-toolbar">
           <div class="search-wrap">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input type="text" id="filterSearch" placeholder="Search domains..." oninput="renderFilters()">
           </div>
           <div class="filter-toolbar-actions">
-            <button class="btn btn-ghost btn-sm" onclick="clearAllFilters()" id="clearFiltersBtn" style="display:none">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-              Clear all
-            </button>
+            <button class="btn btn-ghost btn-sm" onclick="showImportModal()">Import</button>
+            <button class="btn btn-primary btn-sm" onclick="showAddFilterModal()">Add domain</button>
+            <button class="btn btn-ghost btn-sm" onclick="clearAllFilters()" id="clearFiltersBtn" style="display:none">Clear all</button>
           </div>
         </div>
         <div id="filterList" class="filter-list">
@@ -131,76 +127,163 @@
 
     <!-- RUN -->
     <section id="page-run" class="page">
-      <header class="page-head">
-        <div>
-          <h1 class="page-title">Run Sorter</h1>
-          <p class="page-subtitle">Process cookie files against target domains</p>
-        </div>
-      </header>
+      <div class="page-heading">
+        <h1>Run Sorter</h1>
+        <p class="page-subtext">Process cookie files against target domains</p>
+      </div>
 
-      <div class="panel">
-        <div class="form-group">
-          <label for="runSourceDir">Source directory</label>
-          <p class="form-hint">Full path to the folder containing Netscape cookie files</p>
-          <input type="text" id="runSourceDir" placeholder="C:\Users\user\cookies\input">
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="section-tabs">
+          <button class="section-tab active" data-section="dir" onclick="switchSection('dir')">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Directory
+          </button>
+          <button class="section-tab" data-section="import" onclick="switchSection('import')">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Import ZIP/RAR
+          </button>
+          <button class="section-tab" data-section="proxy" onclick="switchSection('proxy')">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+            Proxies
+          </button>
         </div>
 
-        <div class="form-group">
+        <div class="section-panel active" id="sec-dir">
+          <div class="form-group">
+            <label for="runSourceDir">Source directory</label>
+            <p class="form-hint">Full path to the folder containing Netscape cookie files</p>
+            <input type="text" id="runSourceDir" placeholder="C:\Users\user\cookies\input">
+          </div>
+        </div>
+
+        <div class="section-panel" id="sec-import">
+          <div class="drop-zone" id="dropZone">
+            <input type="file" id="importPicker" accept=".zip,.rar" style="display:none" onchange="importArchive(this)">
+            <div class="drop-content">
+              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <p class="drop-title">Drop .zip or .rar here</p>
+              <p class="drop-hint">or click to browse</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-panel" id="sec-proxy">
+          <div class="form-group">
+            <label for="proxyMode">Proxy mode</label>
+            <p class="form-hint">Route cookie checks through a proxy server</p>
+            <div class="radio-group" id="proxyModeGroup">
+              <label class="radio-item"><input type="radio" name="proxyMode" value="off" checked onchange="updateProxyMode()"><span>Off</span></label>
+              <label class="radio-item"><input type="radio" name="proxyMode" value="http" onchange="updateProxyMode()"><span>HTTP</span></label>
+              <label class="radio-item"><input type="radio" name="proxyMode" value="socks4" onchange="updateProxyMode()"><span>SOCKS4</span></label>
+              <label class="radio-item"><input type="radio" name="proxyMode" value="socks5" onchange="updateProxyMode()"><span>SOCKS5</span></label>
+            </div>
+          </div>
+          <div class="form-group" id="proxyFileGroup">
+            <label>Import proxy list</label>
+            <p class="form-hint">Upload a .txt file with one proxy per line (ip:port or ip:port:user:pass)</p>
+            <div class="drop-zone" id="proxyDropZone" style="padding:24px 20px;cursor:pointer">
+              <input type="file" id="proxyFilePicker" accept=".txt" style="display:none" onchange="importProxyFile(this)">
+              <div class="drop-content" style="gap:6px">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+                <p class="drop-title" style="font-size:13px">Choose proxies.txt</p>
+              </div>
+            </div>
+            <div id="proxyStatus" style="display:none"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="form-group" style="margin-bottom:16px">
           <label>Active filters</label>
           <div id="runFilterSummary" class="tag-list"></div>
         </div>
-
-        <button class="btn btn-primary btn-lg" id="startRunBtn" onclick="startRun()">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        <button class="btn btn-primary btn-lg" id="startRunBtn" onclick="startRun()" style="width:100%">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
           Start sorting
         </button>
       </div>
 
-      <div class="panel" id="runProgressPanel" style="display:none">
-        <h3 class="panel-title">Processing</h3>
-        <div class="progress-track">
-          <div class="progress-fill" id="progressFill"></div>
-        </div>
+      <div class="card" id="runProgressPanel" style="display:none">
+        <h3 class="card-title" id="progressTitle">Processing</h3>
+        <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
         <div class="progress-meta">
           <span id="progressFiles">0 / 0 files</span>
           <span id="progressHits">0 hits</span>
           <span id="progressStatus">Initializing...</span>
         </div>
+        <div id="checkProgress" class="progress-check" style="display:none">
+          <div class="check-track"><div class="check-fill" id="checkFill"></div></div>
+          <div class="check-meta">
+            <span id="checkCount">0 checked</span>
+            <span id="checkValid" class="valid">0 valid</span>
+            <span id="checkInvalid" class="invalid">0 invalid</span>
+          </div>
+        </div>
       </div>
 
-      <div class="panel" id="runResultPanel" style="display:none">
-        <h3 class="panel-title">Run complete</h3>
+      <div class="card" id="runResultPanel" style="display:none">
+        <h3 class="card-title">Run complete</h3>
         <div id="runSummary" class="summary-block"></div>
       </div>
     </section>
 
     <!-- HISTORY -->
     <section id="page-history" class="page">
-      <header class="page-head">
-        <div>
-          <h1 class="page-title">History</h1>
-          <p class="page-subtitle">All previous sorting runs</p>
-        </div>
-      </header>
-
-      <div class="panel" id="historyPanel">
-        <div id="historyList" class="skeleton-list">
-          <div class="skeleton-row"></div>
-          <div class="skeleton-row"></div>
-          <div class="skeleton-row"></div>
-        </div>
+      <div class="page-heading">
+        <h1>History</h1>
+        <p class="page-subtext">All previous sorting runs</p>
+      </div>
+      <div class="card">
+        <div id="historyList"><div class="list-skeleton"><div></div><div></div><div></div></div></div>
       </div>
     </section>
 
   </main>
+
+  <!-- BOTTOM DOCK -->
+  <div id="dock">
+    <div class="dock-inner">
+      <div class="dock-item active" data-page="dashboard" title="Dashboard">
+        <div class="dock-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+        </div>
+        <span class="dock-label">Dashboard</span>
+        <div class="dock-dot"></div>
+      </div>
+      <div class="dock-item" data-page="filters" title="Filters">
+        <div class="dock-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M6 12h12"/><path d="M8 18h8"/></svg>
+        </div>
+        <span class="dock-label">Filters</span>
+        <div class="dock-dot"></div>
+      </div>
+      <div class="dock-item" data-page="run" title="Run Sorter">
+        <div class="dock-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </div>
+        <span class="dock-label">Run</span>
+        <div class="dock-dot"></div>
+      </div>
+      <div class="dock-item" data-page="history" title="History">
+        <div class="dock-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <span class="dock-label">History</span>
+        <div class="dock-dot"></div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
+<!-- MODAL -->
 <div id="modal" class="modal-mask" style="display:none" onclick="closeModal()">
   <div class="modal-panel" onclick="event.stopPropagation()">
     <div class="modal-head">
       <h3 id="modalTitle">Modal</h3>
       <button class="modal-x" onclick="closeModal()">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
     </div>
     <div id="modalBody" class="modal-content"></div>

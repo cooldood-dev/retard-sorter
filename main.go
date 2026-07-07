@@ -1,27 +1,38 @@
 package main
 
 import (
+	"archive/zip"
+	"bufio"
+	"bytes"
+	"crypto/tls"
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
+	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nwaples/rardecode"
 )
 
-const Version = "1.0.0"
+const Version = "1.5.0"
 
 //go:embed static/*
 var staticFiles embed.FS
 
 type Config struct {
-	Filters []string `json:"filters"`
-	LastRun string   `json:"last_run"`
+	Filters   []string `json:"filters"`
+	LastRun   string   `json:"last_run"`
+	ProxyMode string   `json:"proxy_mode"` // "off", "http", "socks4", "socks5"
+	ProxyFile string   `json:"proxy_file"`
 }
 
 type Cookie struct {
@@ -41,6 +52,9 @@ type Summary struct {
 	FilesScanned    int            `json:"files_scanned"`
 	TotalCookies    int            `json:"total_cookies"`
 	TotalHits       int            `json:"total_hits"`
+	CheckedCookies  int            `json:"checked_cookies"`
+	ValidCookies    int            `json:"valid_cookies"`
+	InvalidCookies  int            `json:"invalid_cookies"`
 	Errors          int            `json:"errors"`
 	ElapsedSeconds  float64        `json:"elapsed_seconds"`
 	FiltersUsed     []string       `json:"filters_used"`
@@ -74,6 +88,11 @@ type ProgressEvent struct {
 	OutputDir       string         `json:"output_dir,omitempty"`
 	DomainBreakdown map[string]int `json:"domain_breakdown,omitempty"`
 	Message         string         `json:"message,omitempty"`
+	Checked         int            `json:"checked,omitempty"`
+	CheckTotal      int            `json:"check_total,omitempty"`
+	Valid           int            `json:"valid,omitempty"`
+	Invalid         int            `json:"invalid,omitempty"`
+	CheckStatus     string         `json:"check_status,omitempty"` // "idle","checking","done"
 }
 
 var (
@@ -82,6 +101,8 @@ var (
 	cfgPath   string
 	resDir    string
 	assetsDir string
+	proxies   []string
+	proxiesMu sync.Mutex
 )
 
 func getExeDir() string {
@@ -208,19 +229,21 @@ var DefaultFilters = []string{
 }
 
 func parseNetscapeCookieFile(path string) ([]Cookie, error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
 	var cookies []Cookie
-	for _, rawLine := range strings.Split(string(data), "\n") {
-		line := strings.TrimSpace(rawLine)
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
 			continue
 		}
 		parts := strings.Split(line, "\t")
 		if len(parts) >= 7 {
-			c := Cookie{
+			cookies = append(cookies, Cookie{
 				RawDomain: parts[0],
 				Domain:    strings.TrimLeft(parts[0], "."),
 				Flag:      parts[1],
@@ -229,11 +252,12 @@ func parseNetscapeCookieFile(path string) ([]Cookie, error) {
 				Expiry:    parts[4],
 				Name:      parts[5],
 				Value:     strings.Join(parts[6:], "\t"),
-			}
-			cookies = append(cookies, c)
+			})
+		} else if len(cookies) > 0 {
+			cookies[len(cookies)-1].Value += "\n" + line
 		}
 	}
-	return cookies, nil
+	return cookies, scanner.Err()
 }
 
 func cookieMatchesAnyDomain(c Cookie, targets []string) string {
@@ -250,6 +274,138 @@ func cookieMatchesAnyDomain(c Cookie, targets []string) string {
 		}
 	}
 	return ""
+}
+
+// === PROXY ===
+
+func loadProxies(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	proxiesMu.Lock()
+	proxies = nil
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		proxies = append(proxies, line)
+	}
+	proxiesMu.Unlock()
+	return nil
+}
+
+func buildProxyURL(raw, mode string) string {
+	parts := strings.Split(raw, ":")
+	if len(parts) < 2 {
+		return ""
+	}
+	ip, port := parts[0], parts[1]
+	switch {
+	case len(parts) >= 4:
+		user, pass := parts[2], parts[3]
+		return fmt.Sprintf("%s://%s:%s@%s:%s", mode, user, pass, ip, port)
+	case strings.Contains(mode, "socks"):
+		return fmt.Sprintf("socks5://%s:%s", ip, port)
+	default:
+		return fmt.Sprintf("http://%s:%s", ip, port)
+	}
+}
+
+func randomProxy(mode string) string {
+	proxiesMu.Lock()
+	defer proxiesMu.Unlock()
+	if len(proxies) == 0 {
+		return ""
+	}
+	return buildProxyURL(proxies[rand.Intn(len(proxies))], mode)
+}
+
+func validateProxies(mode string) (valid, invalid int) {
+	proxiesMu.Lock()
+	list := make([]string, len(proxies))
+	copy(list, proxies)
+	proxiesMu.Unlock()
+	testURL := "https://www.google.com"
+	for _, raw := range list {
+		pu := buildProxyURL(raw, mode)
+		if pu == "" {
+			invalid++
+			continue
+		}
+		p, e := url.Parse(pu)
+		if e != nil {
+			invalid++
+			continue
+		}
+		c := &http.Client{
+			Transport: &http.Transport{
+				Proxy:           http.ProxyURL(p),
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+			Timeout: 8 * time.Second,
+		}
+		resp, err := c.Get(testURL)
+		if err != nil {
+			invalid++
+			c.CloseIdleConnections()
+			continue
+		}
+		resp.Body.Close()
+		c.CloseIdleConnections()
+		valid++
+	}
+	return
+}
+
+func checkDomainCookies(domain string, cookies []Cookie, proxyURL string) bool {
+	u := "https://" + domain + "/"
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
+	req.Header.Set("Connection", "keep-alive")
+	for _, c := range cookies {
+		req.AddCookie(&http.Cookie{
+			Name:   c.Name,
+			Value:  c.Value,
+			Domain: c.Domain,
+			Path:   c.Path,
+		})
+	}
+	var client *http.Client
+	if proxyURL != "" {
+		p, e := url.Parse(proxyURL)
+		if e != nil {
+			return false
+		}
+		client = &http.Client{
+			Transport: &http.Transport{
+				Proxy:           http.ProxyURL(p),
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+			Timeout: 15 * time.Second,
+		}
+	} else {
+		client = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			},
+			Timeout: 15 * time.Second,
+		}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode == 200
 }
 
 // === HTTP HANDLERS ===
@@ -329,28 +485,8 @@ func handleRunDetail(w http.ResponseWriter, r *http.Request, runID string) {
 	writeJSON(w, s)
 }
 
-func handleRunProgress(w http.ResponseWriter, r *http.Request) {
-	dir := r.URL.Query().Get("dir")
-	if dir == "" {
-		http.Error(w, "missing dir parameter", 400)
-		return
-	}
-
-	cfgMu.RLock()
-	filters := make([]string, len(cfg.Filters))
-	copy(filters, cfg.Filters)
-	cfgMu.RUnlock()
-
-	if len(filters) == 0 {
-		writeSSE(w, ProgressEvent{Type: "error", Message: "no filters configured"})
-		return
-	}
-
-	info, err := os.Stat(dir)
-	if err != nil || !info.IsDir() {
-		writeSSE(w, ProgressEvent{Type: "error", Message: "invalid directory"})
-		return
-	}
+func processFileLoop(w http.ResponseWriter, flusher http.Flusher, filters []string, dir, hitsDir, timestamp, proxyMode, proxyFile string) (Summary, bool) {
+	now := time.Now()
 
 	var files []string
 	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
@@ -362,28 +498,25 @@ func handleRunProgress(w http.ResponseWriter, r *http.Request) {
 	})
 	sort.Strings(files)
 
-	if len(files) == 0 {
-		writeSSE(w, ProgressEvent{Type: "error", Message: "no files in directory"})
-		return
+	totalFiles := len(files)
+	if totalFiles == 0 {
+		return Summary{}, false
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	flusher, _ := w.(http.Flusher)
-
-	now := time.Now()
-	timestamp := now.Format("20060102_150405")
 	runDir := filepath.Join(resDir, "run_"+timestamp)
-	hitsDir := filepath.Join(runDir, "hits")
-	os.MkdirAll(hitsDir, 0755)
-
-	totalFiles := len(files)
 	totalCookies := 0
 	totalHits := 0
 	domainHits := make(map[string]int)
 	errors := 0
 	startTime := time.Now()
+
+	// Collect all hits grouped by source file for cookie checking
+	type fileHitsInfo struct {
+		relPath string
+		cookies []Cookie
+		domains map[string][]Cookie
+	}
+	var allFileHits []fileHitsInfo
 
 	for idx, filePath := range files {
 		relPath, _ := filepath.Rel(dir, filePath)
@@ -400,20 +533,27 @@ func handleRunProgress(w http.ResponseWriter, r *http.Request) {
 
 		totalCookies += len(cookies)
 		var fileHits []Cookie
+		domains := make(map[string][]Cookie)
 		for _, c := range cookies {
 			matchedDomain := cookieMatchesAnyDomain(c, filters)
 			if matchedDomain != "" {
 				fileHits = append(fileHits, c)
+				domains[matchedDomain] = append(domains[matchedDomain], c)
 				domainHits[matchedDomain]++
 				totalHits++
 			}
 		}
 
 		if len(fileHits) > 0 {
-			outRel := strings.ReplaceAll(relPath, " ", "_")
-			outRel = strings.ReplaceAll(outRel, "/", "\\")
-			outPath := filepath.Join(hitsDir, outRel)
-			os.MkdirAll(filepath.Dir(outPath), 0755)
+			allFileHits = append(allFileHits, fileHitsInfo{relPath, fileHits, domains})
+		}
+
+		// Write hits file
+		if len(fileHits) > 0 {
+			flatName := strings.ReplaceAll(relPath, " ", "_")
+			flatName = strings.ReplaceAll(flatName, "/", "_")
+			flatName = strings.ReplaceAll(flatName, "\\", "_")
+			outPath := filepath.Join(hitsDir, flatName)
 			var sb strings.Builder
 			sb.WriteString("# Netscape HTTP Cookie File\n")
 			sb.WriteString(fmt.Sprintf("# Source: %s\n", filePath))
@@ -446,41 +586,394 @@ func handleRunProgress(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	elapsed := time.Since(startTime).Seconds()
+	checked := 0
+	valid := 0
+	invalid := 0
 
-	summary := Summary{
+	if (proxyMode == "http" || proxyMode == "socks4" || proxyMode == "socks5") && len(allFileHits) > 0 {
+		totalChecks := 0
+		for _, fh := range allFileHits {
+			totalChecks += len(fh.domains)
+		}
+
+		fmt.Fprintf(w, "data: %s\n\n", mustJSON(ProgressEvent{
+			Type: "progress", Processed: totalFiles, Total: totalFiles,
+			Hits: totalHits, Percent: 100, Checked: 0, CheckTotal: totalChecks, CheckStatus: "loading proxies",
+		}))
+		flusher.Flush()
+
+		if proxyFile != "" {
+			if err := loadProxies(proxyFile); err != nil {
+				fmt.Fprintf(w, "data: %s\n\n", mustJSON(ProgressEvent{
+					Type: "progress", Processed: totalFiles, Total: totalFiles,
+					Hits: totalHits, Percent: 100, Checked: 0, CheckTotal: totalChecks, CheckStatus: "proxy load failed: " + err.Error(),
+				}))
+				flusher.Flush()
+			}
+		}
+		checkIdx := 0
+		for _, fh := range allFileHits {
+			for domain, cookies := range fh.domains {
+				checkIdx++
+				pct := float64(checkIdx) / float64(totalChecks) * 100
+				fmt.Fprintf(w, "data: %s\n\n", mustJSON(ProgressEvent{
+					Type: "progress", Processed: totalFiles, Total: totalFiles,
+					Hits: totalHits, Percent: pct, Checked: checkIdx, CheckTotal: totalChecks,
+					Valid: valid, Invalid: invalid, CheckStatus: fmt.Sprintf("checking %s (%d/%d)", domain, checkIdx, totalChecks),
+				}))
+				flusher.Flush()
+
+				proxyURL := ""
+				proxiesMu.Lock()
+				hasProxies := len(proxies) > 0
+				proxiesMu.Unlock()
+				if hasProxies {
+					proxyURL = randomProxy(proxyMode)
+				}
+				checked++
+				if checkDomainCookies(domain, cookies, proxyURL) {
+					valid++
+				} else {
+					invalid++
+				}
+			}
+		}
+	}
+
+	elapsed := time.Since(startTime).Seconds()
+	return Summary{
 		RunID:           timestamp,
 		Timestamp:       now.Format(time.RFC3339),
 		FilesScanned:    totalFiles,
 		TotalCookies:    totalCookies,
 		TotalHits:       totalHits,
+		CheckedCookies:  checked,
+		ValidCookies:    valid,
+		InvalidCookies:  invalid,
 		Errors:          errors,
 		ElapsedSeconds:  elapsed,
 		FiltersUsed:     filters,
 		SourceDirectory: dir,
 		DomainBreakdown: domainHits,
 		OutputDir:       runDir,
+	}, true
+}
+
+func handleRunProgress(w http.ResponseWriter, r *http.Request) {
+	dir := r.URL.Query().Get("dir")
+	if dir == "" {
+		http.Error(w, "missing dir parameter", 400)
+		return
 	}
+
+	cfgMu.RLock()
+	filters := make([]string, len(cfg.Filters))
+	copy(filters, cfg.Filters)
+	proxyMode := cfg.ProxyMode
+	proxyFile := cfg.ProxyFile
+	cfgMu.RUnlock()
+
+	if len(filters) == 0 {
+		writeSSE(w, ProgressEvent{Type: "error", Message: "no filters configured"})
+		return
+	}
+
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		writeSSE(w, ProgressEvent{Type: "error", Message: "invalid directory"})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher, _ := w.(http.Flusher)
+
+	now := time.Now()
+	timestamp := now.Format("20060102_150405")
+	runDir := filepath.Join(resDir, "run_"+timestamp)
+	hitsDir := filepath.Join(runDir, "hits")
+	os.MkdirAll(hitsDir, 0755)
+
+	summary, ok := processFileLoop(w, flusher, filters, dir, hitsDir, timestamp, proxyMode, proxyFile)
+	if !ok {
+		writeSSE(w, ProgressEvent{Type: "error", Message: "no files in directory"})
+		return
+	}
+
 	sumData, _ := json.MarshalIndent(summary, "", "  ")
 	os.WriteFile(filepath.Join(runDir, "summary.json"), sumData, 0644)
 
 	cfgMu.Lock()
-	cfg.LastRun = timestamp
+	cfg.LastRun = summary.RunID
 	saveConfig(cfg)
 	cfgMu.Unlock()
 
 	fmt.Fprintf(w, "data: %s\n\n", mustJSON(ProgressEvent{
 		Type:            "complete",
-		RunID:           timestamp,
-		FilesScanned:    totalFiles,
-		TotalCookies:    totalCookies,
-		TotalHits:       totalHits,
-		Errors:          errors,
-		ElapsedSeconds:  elapsed,
-		OutputDir:       runDir,
-		DomainBreakdown: domainHits,
+		RunID:           summary.RunID,
+		FilesScanned:    summary.FilesScanned,
+		TotalCookies:    summary.TotalCookies,
+		TotalHits:       summary.TotalHits,
+		Checked:         summary.CheckedCookies,
+		Valid:           summary.ValidCookies,
+		Invalid:         summary.InvalidCookies,
+		Errors:          summary.Errors,
+		ElapsedSeconds:  summary.ElapsedSeconds,
+		OutputDir:       summary.OutputDir,
+		DomainBreakdown: summary.DomainBreakdown,
 	}))
 	flusher.Flush()
+}
+
+func handleImportRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+
+	cfgMu.RLock()
+	filters := make([]string, len(cfg.Filters))
+	copy(filters, cfg.Filters)
+	proxyMode := cfg.ProxyMode
+	proxyFile := cfg.ProxyFile
+	cfgMu.RUnlock()
+
+	if len(filters) == 0 {
+		writeJSON(w, map[string]string{"error": "no filters configured"})
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 200<<20)
+	if err := r.ParseMultipartForm(100 << 20); err != nil {
+		writeJSON(w, map[string]string{"error": "file too large or invalid multipart"})
+		return
+	}
+
+	file, header, err := r.FormFile("archive")
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "missing archive file"})
+		return
+	}
+	defer file.Close()
+
+	tmpDir, err := os.MkdirTemp("", "retard-import-*")
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "failed to create temp dir"})
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	lower := strings.ToLower(header.Filename)
+	switch {
+	case strings.HasSuffix(lower, ".zip"):
+		err = extractZip(file, tmpDir)
+	case strings.HasSuffix(lower, ".rar"):
+		err = extractRar(file, tmpDir)
+	default:
+		os.RemoveAll(tmpDir)
+		writeJSON(w, map[string]string{"error": "unsupported format, use .zip or .rar"})
+		return
+	}
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		writeJSON(w, map[string]string{"error": "extraction failed: " + err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher, _ := w.(http.Flusher)
+
+	now := time.Now()
+	timestamp := now.Format("20060102_150405")
+	runDir := filepath.Join(resDir, "run_"+timestamp)
+	hitsDir := filepath.Join(runDir, "hits")
+	os.MkdirAll(hitsDir, 0755)
+
+	summary, ok := processFileLoop(w, flusher, filters, tmpDir, hitsDir, timestamp, proxyMode, proxyFile)
+	if !ok {
+		fmt.Fprintf(w, "data: %s\n\n", mustJSON(ProgressEvent{
+			Type: "error", Message: "no cookie files found in archive",
+		}))
+		flusher.Flush()
+		return
+	}
+
+	sumData, _ := json.MarshalIndent(summary, "", "  ")
+	os.WriteFile(filepath.Join(runDir, "summary.json"), sumData, 0644)
+
+	cfgMu.Lock()
+	cfg.LastRun = summary.RunID
+	saveConfig(cfg)
+	cfgMu.Unlock()
+
+	fmt.Fprintf(w, "data: %s\n\n", mustJSON(ProgressEvent{
+		Type:            "complete",
+		RunID:           summary.RunID,
+		FilesScanned:    summary.FilesScanned,
+		TotalCookies:    summary.TotalCookies,
+		TotalHits:       summary.TotalHits,
+		Checked:         summary.CheckedCookies,
+		Valid:           summary.ValidCookies,
+		Invalid:         summary.InvalidCookies,
+		Errors:          summary.Errors,
+		ElapsedSeconds:  summary.ElapsedSeconds,
+		OutputDir:       summary.OutputDir,
+		DomainBreakdown: summary.DomainBreakdown,
+	}))
+	flusher.Flush()
+}
+
+func handleProxyConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		var req struct {
+			ProxyMode string `json:"proxy_mode"`
+			ProxyFile string `json:"proxy_file"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		switch req.ProxyMode {
+		case "", "off", "http", "socks4", "socks5":
+		default:
+			http.Error(w, "invalid proxy mode", 400)
+			return
+		}
+		if req.ProxyMode == "" {
+			req.ProxyMode = "off"
+		}
+		cfgMu.Lock()
+		cfg.ProxyMode = req.ProxyMode
+		cfg.ProxyFile = req.ProxyFile
+		if req.ProxyMode != "off" && req.ProxyFile != "" {
+			loadProxies(req.ProxyFile)
+		}
+		saveConfig(cfg)
+		cfgMu.Unlock()
+		writeJSON(w, map[string]string{"status": "ok"})
+		return
+	}
+	handleConfig(w, r)
+}
+
+func handleProxyImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", 405)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+	if err := r.ParseMultipartForm(5 << 20); err != nil {
+		writeJSON(w, map[string]string{"error": "file too large"})
+		return
+	}
+	file, _, err := r.FormFile("proxy_file")
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "missing proxy_file"})
+		return
+	}
+	defer file.Close()
+	content, err := io.ReadAll(file)
+	if err != nil {
+		writeJSON(w, map[string]string{"error": "read failed"})
+		return
+	}
+	savePath := filepath.Join(assetsDir, "proxies.txt")
+	if err := os.WriteFile(savePath, content, 0644); err != nil {
+		writeJSON(w, map[string]string{"error": "save failed"})
+		return
+	}
+	if err := loadProxies(savePath); err != nil {
+		writeJSON(w, map[string]string{"error": "parse failed"})
+		return
+	}
+	cfgMu.Lock()
+	mode := cfg.ProxyMode
+	if mode == "" || mode == "off" {
+		mode = "http"
+	}
+	cfg.ProxyFile = savePath
+	cfg.ProxyMode = mode
+	saveConfig(cfg)
+	cfgMu.Unlock()
+	valid, invalid := validateProxies(mode)
+	proxiesMu.Lock()
+	total := len(proxies)
+	proxiesMu.Unlock()
+	writeJSON(w, map[string]interface{}{
+		"status":  "ok",
+		"total":   total,
+		"valid":   valid,
+		"invalid": invalid,
+		"file":    savePath,
+	})
+}
+
+func extractZip(src io.Reader, dest string) error {
+	data, err := io.ReadAll(src)
+	if err != nil {
+		return err
+	}
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return err
+	}
+	for _, f := range zr.File {
+		fpath := filepath.Join(dest, f.Name)
+		if f.FileInfo().IsDir() {
+			os.MkdirAll(fpath, 0755)
+			continue
+		}
+		os.MkdirAll(filepath.Dir(fpath), 0755)
+		rc, err := f.Open()
+		if err != nil {
+			continue
+		}
+		out, err := os.Create(fpath)
+		if err != nil {
+			rc.Close()
+			continue
+		}
+		io.Copy(out, rc)
+		rc.Close()
+		out.Close()
+	}
+	return nil
+}
+
+func extractRar(src io.Reader, dest string) error {
+	data, err := io.ReadAll(src)
+	if err != nil {
+		return err
+	}
+	rr, err := rardecode.NewReader(bytes.NewReader(data), "")
+	if err != nil {
+		return err
+	}
+	for {
+		hdr, err := rr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			continue
+		}
+		fpath := filepath.Join(dest, hdr.Name)
+		if hdr.IsDir {
+			os.MkdirAll(fpath, 0755)
+			continue
+		}
+		os.MkdirAll(filepath.Dir(fpath), 0755)
+		out, err := os.Create(fpath)
+		if err != nil {
+			continue
+		}
+		io.Copy(out, rr)
+		out.Close()
+	}
+	return nil
 }
 
 // === HELPERS ===
@@ -533,8 +1026,11 @@ func main() {
 		http.FileServer(http.Dir(assetsDir))))
 	mux.HandleFunc("/api/config", handleConfig)
 	mux.HandleFunc("/api/config/filters", handleUpdateFilters)
+	mux.HandleFunc("/api/config/proxy", handleProxyConfig)
+	mux.HandleFunc("/api/config/proxy/import", handleProxyImport)
 	mux.HandleFunc("/api/runs", handleRuns)
 	mux.HandleFunc("/api/run/progress", handleRunProgress)
+	mux.HandleFunc("/api/run/import", handleImportRun)
 	mux.HandleFunc("/api/runs/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/api/runs/")
 		if path == "" {

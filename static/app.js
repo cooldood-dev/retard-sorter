@@ -14,139 +14,204 @@ async function api(method, path, body) {
 /* ── Asset fallbacks ── */
 (function() {
   var vid = document.getElementById('bg-video');
-  if (vid) {
-    vid.onerror = function() {
-      document.getElementById('bg-video-wrap').style.display = 'none';
-    };
-  }
+  if (vid) { vid.onerror = function() { document.getElementById('bg-video-wrap').style.display = 'none'; }; }
 })();
 (function() {
   var img = document.getElementById('brandImg');
-  if (img) {
-    img.onerror = function() {
-      if (this.src.indexOf('logo.png') > -1) {
-        this.style.display = 'none';
-        var fb = document.getElementById('brandFallback');
-        if (fb) fb.style.display = 'flex';
-      } else {
-        this.src = '/assets/logo.png';
-      }
-    };
-    if (img.complete && img.naturalWidth === 0) img.onerror();
-  }
+  if (img) { img.onerror = function() { this.style.display='none'; document.getElementById('brandFallbackTop').style.display='flex'; }; if (img.complete && img.naturalWidth === 0) img.onerror(); }
 })();
 
 /* ── Init ── */
 document.addEventListener('DOMContentLoaded', async () => {
-  try { config = await api('GET', '/api/config'); } catch { config = { filters: [], last_run: '' }; }
+  try { config = await api('GET', '/api/config'); } catch { config = { filters: [], last_run: '', proxy_mode: 'off', proxy_file: '' }; }
   updateAll();
+  renderProxySettings();
   refreshDashboard();
   refreshHistory();
+  initDock();
 });
 
-/* ── Navigation ── */
+/* ── NAVIGATION ── */
 function navigate(page) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.querySelectorAll('.dock-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + page).classList.add('active');
-  document.querySelector(`.nav-item[data-page="${page}"]`).classList.add('active');
+  var dockItem = document.querySelector('.dock-item[data-page="' + page + '"]');
+  if (dockItem) dockItem.classList.add('active');
   if (page === 'dashboard') refreshDashboard();
+  if (page === 'run') renderProxySettings();
   if (page === 'history') refreshHistory();
+}
+
+/* ── DOCK MAGNIFICATION ── */
+function initDock() {
+  var dock = document.getElementById('dock');
+  var inner = dock.querySelector('.dock-inner');
+  var items = dock.querySelectorAll('.dock-item');
+  var maxDist = 130;
+  var maxMag = 0.4;
+  var rafId = null;
+
+  function smoothstep(t) { return t * t * (3 - 2 * t); }
+
+  var basePad = 28;
+  var baseGap = 20;
+  var centers = [];
+  function cacheCenters() {
+    for (var i = 0; i < items.length; i++) {
+      var rect = items[i].getBoundingClientRect();
+      centers[i] = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    }
+  }
+  cacheCenters();
+  window.addEventListener('resize', cacheCenters);
+
+  function updateMagnification(mouseX, mouseY) {
+    var peakMag = 0;
+    for (var i = 0; i < items.length; i++) {
+      var cx = centers[i].x;
+      var cy = centers[i].y;
+      var dx = mouseX - cx;
+      var dy = mouseY - cy;
+      var dist = Math.sqrt(dx * dx + dy * dy);
+      var mag = 0;
+      if (dist < maxDist) {
+        var t = 1 - dist / maxDist;
+        mag = maxMag * smoothstep(t);
+      }
+      if (mag > peakMag) peakMag = mag;
+      var scale = 1 + mag;
+      var lift = mag * 20;
+      items[i].style.transform = 'scale(' + scale + ') translateY(' + (-lift) + 'px)';
+      items[i].style.zIndex = Math.round(mag * 100);
+    }
+    var extra = peakMag * 24;
+    inner.style.paddingLeft = (basePad + extra) + 'px';
+    inner.style.paddingRight = (basePad + extra) + 'px';
+    inner.style.gap = (baseGap + extra / 2) + 'px';
+  }
+
+  function resetMagnification() {
+    for (var i = 0; i < items.length; i++) {
+      items[i].style.transform = '';
+      items[i].style.zIndex = '';
+    }
+    inner.style.paddingLeft = '';
+    inner.style.paddingRight = '';
+    inner.style.gap = '';
+  }
+
+  inner.addEventListener('mousemove', function(e) {
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = requestAnimationFrame(function() {
+      updateMagnification(e.clientX, e.clientY);
+    });
+  });
+
+  inner.addEventListener('mouseleave', function() {
+    if (rafId) cancelAnimationFrame(rafId);
+    resetMagnification();
+  });
+
+  inner.addEventListener('click', function(e) {
+    var target = e.target.closest('.dock-item');
+    if (target) {
+      var page = target.getAttribute('data-page');
+      navigate(page);
+    }
+  });
 }
 
 /* ── Updates ── */
 function updateAll() {
-  const n = config.filters.length;
-  document.getElementById('filterCount').textContent = n + ' domain' + (n !== 1 ? 's' : '');
-  document.getElementById('filterSubtitle').textContent = n + ' target domain' + (n !== 1 ? 's' : '') + ' configured';
-  document.getElementById('statFilters').textContent = n;
+  var n = config.filters.length;
+  document.getElementById('filterSubtext').textContent = n + ' target domain' + (n !== 1 ? 's' : '') + ' configured';
   document.getElementById('clearFiltersBtn').style.display = n ? '' : 'none';
   renderFilters();
   renderRunFilterSummary();
 }
 
-/* ── Dashboard ── */
+/* ── DASHBOARD ── */
 async function refreshDashboard() {
   try {
-    const runs = await api('GET', '/api/runs');
+    var runs = await api('GET', '/api/runs');
     document.getElementById('statRuns').textContent = runs.length;
-    let files = 0, hits = 0;
-    for (const r of runs) { files += r.files_scanned || 0; hits += r.total_hits || 0; }
+    var files = 0, hits = 0;
+    for (var i = 0; i < runs.length; i++) { files += runs[i].files_scanned || 0; hits += runs[i].total_hits || 0; }
     document.getElementById('statFiles').textContent = files.toLocaleString();
     document.getElementById('statHits').textContent = hits.toLocaleString();
-    document.getElementById('dashSubtitle').textContent = runs.length
+    document.getElementById('statHitsBadge').textContent = hits.toLocaleString();
+    document.getElementById('dashSubtext').textContent = runs.length
       ? 'Total: ' + files.toLocaleString() + ' files, ' + hits.toLocaleString() + ' hits across ' + runs.length + ' run' + (runs.length !== 1 ? 's' : '')
       : 'No runs yet. Start your first sort.';
     renderRecent(runs);
   } catch {
-    document.getElementById('recentList').innerHTML = '<p class="text-muted">Could not load data.</p>';
+    document.getElementById('recentList').innerHTML = '<p class="text-muted" style="padding:12px 0">Could not load data.</p>';
   }
 }
 
 function renderRecent(runs) {
-  const el = document.getElementById('recentList');
+  var el = document.getElementById('recentList');
   if (!runs.length) {
-    el.innerHTML = '<p class="text-muted" style="padding:12px 0">No runs yet — create one from the Run Sorter page.</p>';
+    el.innerHTML = '<p class="text-muted" style="padding:12px 0">No runs yet.</p>';
     return;
   }
-  el.innerHTML = runs.slice(0, 5).map(r => `
-    <div class="history-row" onclick="viewRun('${r.run_id}')">
-      <div>
-        <div class="run-id">${esc(r.run_id)}</div>
-        <div class="run-meta">
-          <span>${r.files_scanned} files</span>
-          <span>${r.elapsed_seconds.toFixed(1)}s</span>
-        </div>
-      </div>
-      <span class="hit-count">${r.total_hits} hit${r.total_hits !== 1 ? 's' : ''}</span>
-    </div>
-  `).join('');
+  el.innerHTML = runs.slice(0, 6).map(function(r) { return (
+    '<div class="list-item" onclick="viewRun(\'' + r.run_id + '\')">' +
+      '<div class="list-radio"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div>' +
+      '<div class="list-body">' +
+        '<div class="list-title">' + esc(r.run_id) + '</div>' +
+        '<div class="list-sub">' + r.files_scanned + ' files, ' + r.elapsed_seconds.toFixed(1) + 's</div>' +
+      '</div>' +
+      '<span style="color:var(--accent);font-weight:600;font-family:var(--mono)">' + r.total_hits + ' hit' + (r.total_hits !== 1 ? 's' : '') + '</span>' +
+      '<svg class="list-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>' +
+    '</div>'
+  ); }).join('');
 }
 
-/* ── Filters ── */
+/* ── FILTERS ── */
 function renderFilters() {
-  const q = (document.getElementById('filterSearch').value || '').toLowerCase();
-  const list = document.getElementById('filterList');
-  const filtered = q ? config.filters.filter(d => d.includes(q)) : config.filters;
+  var q = (document.getElementById('filterSearch').value || '').toLowerCase();
+  var list = document.getElementById('filterList');
+  var filtered = q ? config.filters.filter(function(d) { return d.indexOf(q) !== -1; }) : config.filters;
   if (!filtered.length) {
     list.innerHTML = '<p class="empty-state">' + (config.filters.length ? 'No domains match your search.' : 'No domains configured. Add one to get started.') + '</p>';
     return;
   }
-  list.innerHTML = filtered.map(d => `
-    <div class="filter-item">
-      <span class="domain">${esc(d)}</span>
-      <button class="remove-btn" title="Remove" onclick="removeFilter('${esc(d)}')">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-      </button>
-    </div>
-  `).join('');
+  list.innerHTML = filtered.map(function(d) { return (
+    '<div class="filter-item">' +
+      '<span class="domain">' + esc(d) + '</span>' +
+      '<button class="remove-btn" title="Remove" onclick="removeFilter(\'' + esc(d) + '\')">' +
+        '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+      '</button>' +
+    '</div>'
+  ); }).join('');
 }
 
 async function removeFilter(d) {
-  config.filters = config.filters.filter(x => x !== d);
+  config.filters = config.filters.filter(function(x) { return x !== d; });
   await api('POST', '/api/config/filters', { filters: config.filters });
   updateAll();
   refreshDashboard();
 }
 
 function showAddFilterModal() {
-  showModal('Add domain', `
-    <div class="form-group">
-      <label>Domain</label>
-      <input type="text" id="newFilterInput" placeholder="login.live.com" style="margin-bottom:0">
-    </div>
-    <p class="form-hint">Enter a single domain. Subdomains will match automatically.</p>
-  `, `
-    <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-    <button class="btn btn-primary" onclick="addFilter()">Add</button>
-  `);
-  setTimeout(() => document.getElementById('newFilterInput')?.focus(), 100);
+  showModal('Add domain',
+    '<div class="form-group">' +
+      '<label>Domain</label>' +
+      '<input type="text" id="newFilterInput" placeholder="login.live.com" style="margin-bottom:0">' +
+    '</div>' +
+    '<p class="form-hint">Enter a single domain. Subdomains will match automatically.</p>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="addFilter()">Add</button>'
+  );
+  setTimeout(function() { var el = document.getElementById('newFilterInput'); if (el) el.focus(); }, 100);
 }
 
 async function addFilter() {
-  const d = document.getElementById('newFilterInput').value.trim().toLowerCase();
+  var d = document.getElementById('newFilterInput').value.trim().toLowerCase();
   if (!d) return;
-  if (!config.filters.includes(d)) config.filters.push(d);
+  if (config.filters.indexOf(d) === -1) config.filters.push(d);
   closeModal();
   await api('POST', '/api/config/filters', { filters: config.filters });
   updateAll();
@@ -154,23 +219,24 @@ async function addFilter() {
 }
 
 function showImportModal() {
-  showModal('Import domains', `
-    <div class="form-group">
-      <label>Paste domains</label>
-      <textarea id="importText" placeholder="login.live.com&#10;login.microsoftonline.com&#10;accounts.google.com"></textarea>
-    </div>
-    <p class="form-hint">One domain per line. Duplicates are ignored.</p>
-  `, `
-    <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-    <button class="btn btn-primary" onclick="importFilters()">Import</button>
-  `);
+  showModal('Import domains',
+    '<div class="form-group">' +
+      '<label>Paste domains</label>' +
+      '<textarea id="importText" placeholder="login.live.com\nlogin.microsoftonline.com\naccounts.google.com"></textarea>' +
+    '</div>' +
+    '<p class="form-hint">One domain per line. Duplicates are ignored.</p>',
+    '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="importFilters()">Import</button>'
+  );
 }
 
 async function importFilters() {
-  const text = document.getElementById('importText').value;
-  const lines = text.split('\n').map(l => l.trim().toLowerCase()).filter(l => l);
-  let added = 0;
-  for (const d of lines) { if (!config.filters.includes(d)) { config.filters.push(d); added++; } }
+  var text = document.getElementById('importText').value;
+  var lines = text.split('\n').map(function(l) { return l.trim().toLowerCase(); }).filter(function(l) { return l; });
+  var added = 0;
+  for (var i = 0; i < lines.length; i++) {
+    if (config.filters.indexOf(lines[i]) === -1) { config.filters.push(lines[i]); added++; }
+  }
   closeModal();
   await api('POST', '/api/config/filters', { filters: config.filters });
   updateAll();
@@ -186,19 +252,179 @@ async function clearAllFilters() {
 }
 
 function renderRunFilterSummary() {
-  const el = document.getElementById('runFilterSummary');
+  var el = document.getElementById('runFilterSummary');
   if (!config || !config.filters.length) {
     el.innerHTML = '<span class="text-muted">No filters configured. Add some from the Filters page.</span>';
     return;
   }
-  const shown = config.filters.slice(0, 30);
-  el.innerHTML = shown.map(d => `<span class="tag">${esc(d)}</span>`).join('');
-  if (config.filters.length > 30) el.innerHTML += `<span class="tag">+${config.filters.length - 30} more</span>`;
+  var shown = config.filters.slice(0, 30);
+  el.innerHTML = shown.map(function(d) { return '<span class="tag">' + esc(d) + '</span>'; }).join('');
+  if (config.filters.length > 30) el.innerHTML += '<span class="tag">+' + (config.filters.length - 30) + ' more</span>';
+}
+
+/* ── Section tabs (Run page) ── */
+function switchSection(name) {
+  document.querySelectorAll('.section-tab').forEach(function(t) { t.classList.remove('active'); });
+  document.querySelectorAll('.section-panel').forEach(function(p) { p.classList.remove('active'); });
+  document.querySelector('.section-tab[data-section="' + name + '"]').classList.add('active');
+  document.getElementById('sec-' + name).classList.add('active');
+}
+
+/* ── Drop zones ── */
+document.addEventListener('DOMContentLoaded', function() {
+  var dz = document.getElementById('dropZone');
+  if (dz) {
+    dz.addEventListener('click', function() { document.getElementById('importPicker').click(); });
+    dz.addEventListener('dragover', function(e) { e.preventDefault(); dz.classList.add('drag-over'); });
+    dz.addEventListener('dragleave', function() { dz.classList.remove('drag-over'); });
+    dz.addEventListener('drop', function(e) {
+      e.preventDefault();
+      dz.classList.remove('drag-over');
+      var file = e.dataTransfer.files[0];
+      if (file && (file.name.indexOf('.zip') > -1 || file.name.indexOf('.rar') > -1)) {
+        document.getElementById('importPicker').files = e.dataTransfer.files;
+        importArchive(document.getElementById('importPicker'));
+      }
+    });
+  }
+  var pz = document.getElementById('proxyDropZone');
+  if (pz) {
+    pz.addEventListener('click', function() { document.getElementById('proxyFilePicker').click(); });
+  }
+});
+
+/* ── Proxy ── */
+function renderProxySettings() {
+  if (!config) return;
+  var mode = config.proxy_mode || 'off';
+  document.querySelectorAll('input[name="proxyMode"]').forEach(function(r) { r.checked = r.value === mode; });
+  var fg = document.getElementById('proxyFileGroup');
+  if (fg) fg.style.display = mode === 'off' ? 'none' : '';
+  updateProxyStatus();
+}
+
+function updateProxyMode() {
+  var mode = document.querySelector('input[name="proxyMode"]:checked');
+  if (!mode) return;
+  var fg = document.getElementById('proxyFileGroup');
+  if (fg) fg.style.display = mode.value === 'off' ? 'none' : '';
+  if (mode.value !== 'off') {
+    api('POST', '/api/config/proxy', { proxy_mode: mode.value, proxy_file: config.proxy_file || '' })
+      .then(function() { return api('GET', '/api/config'); })
+      .then(function(c) { config = c; })
+      .catch(function(e) { console.error(e); });
+  }
+}
+
+function updateProxyStatus() {
+  var el = document.getElementById('proxyStatus');
+  if (!el) return;
+  var mode = document.querySelector('input[name="proxyMode"]:checked');
+  if (!mode || mode.value === 'off') { el.style.display = 'none'; return; }
+  var file = config.proxy_file;
+  if (!file) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+}
+
+function importProxyFile(input) {
+  var file = input.files[0];
+  if (!file) return;
+  var el = document.getElementById('proxyStatus');
+  el.style.display = 'block';
+  el.textContent = 'Uploading and validating...';
+
+  var formData = new FormData();
+  formData.append('proxy_file', file);
+
+  fetch('/api/config/proxy/import', { method: 'POST', body: formData })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.error) { el.textContent = 'Error: ' + data.error; return; }
+      el.innerHTML = '<span class="proxy-ok">' + data.total + ' proxies</span> &middot; <span class="proxy-valid">' + data.valid + ' valid</span> &middot; <span class="proxy-invalid">' + data.invalid + ' failed</span>';
+      return api('GET', '/api/config');
+    })
+    .then(function(c) { if (c) { config = c; renderProxySettings(); } })
+    .catch(function(e) { el.textContent = 'Import failed: ' + e.message; });
+  input.value = '';
+}
+
+/* ── Import archive ── */
+function importArchive(input) {
+  var file = input.files[0];
+  if (!file) return;
+  if (!config.filters.length) { alert('No filters configured.'); input.value = ''; return; }
+
+  document.getElementById('startRunBtn').disabled = true;
+  document.getElementById('runProgressPanel').style.display = 'block';
+  document.getElementById('runResultPanel').style.display = 'none';
+  document.getElementById('progressFill').style.width = '0%';
+  document.getElementById('progressFiles').textContent = 'Extracting...';
+  document.getElementById('progressHits').textContent = '0 hits';
+  document.getElementById('progressStatus').textContent = 'Uploading...';
+
+  var formData = new FormData();
+  formData.append('archive', file);
+
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/run/import', true);
+  xhr.setRequestHeader('Accept', 'text/event-stream');
+
+  var lastIndex = 0;
+  xhr.onprogress = function() {
+    var chunk = xhr.responseText.substring(lastIndex);
+    lastIndex = xhr.responseText.length;
+    var lines = chunk.split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (line.indexOf('data: ') === 0) {
+        try {
+          var data = JSON.parse(line.substring(6));
+          if (data.type === 'progress') {
+            document.getElementById('progressFill').style.width = data.percent + '%';
+            document.getElementById('progressFiles').textContent = data.processed + ' / ' + data.total + ' files';
+            document.getElementById('progressHits').textContent = data.hits + ' hits';
+            if (data.check_status) {
+              document.getElementById('progressTitle').textContent = 'Checking cookies';
+              document.getElementById('checkProgress').style.display = 'block';
+              document.getElementById('checkCount').textContent = data.checked + ' / ' + (data.check_total || '?') + ' checked';
+              document.getElementById('checkValid').textContent = data.valid + ' valid';
+              document.getElementById('checkInvalid').textContent = data.invalid + ' invalid';
+              document.getElementById('checkFill').style.width = data.percent + '%';
+              document.getElementById('progressStatus').textContent = data.check_status;
+            } else {
+              document.getElementById('progressStatus').textContent = 'Processing...';
+            }
+          } else if (data.type === 'complete') {
+            document.getElementById('progressTitle').textContent = 'Processing';
+            document.getElementById('checkProgress').style.display = 'none';
+            document.getElementById('progressFill').style.width = '100%';
+            document.getElementById('progressStatus').textContent = 'Done';
+            document.getElementById('startRunBtn').disabled = false;
+            document.getElementById('runResultPanel').style.display = 'block';
+            renderRunComplete(data);
+            refreshDashboard();
+            refreshHistory();
+          } else if (data.type === 'error') {
+            document.getElementById('progressTitle').textContent = 'Processing';
+            document.getElementById('checkProgress').style.display = 'none';
+            document.getElementById('progressStatus').textContent = 'Error: ' + (data.message || 'unknown');
+            document.getElementById('startRunBtn').disabled = false;
+          }
+        } catch(e) {}
+      }
+    }
+  };
+  xhr.onerror = function() {
+    document.getElementById('progressStatus').textContent = 'Upload failed';
+    document.getElementById('startRunBtn').disabled = false;
+  };
+  xhr.send(formData);
+  input.value = '';
 }
 
 /* ── Run ── */
 async function startRun() {
-  const dir = document.getElementById('runSourceDir').value.trim();
+  var dir = document.getElementById('runSourceDir').value.trim();
   if (!dir) { alert('Enter a source directory path.'); return; }
   if (!config.filters.length) { alert('No filters configured. Add at least one target domain.'); return; }
 
@@ -211,113 +437,141 @@ async function startRun() {
   document.getElementById('progressHits').textContent = '0 hits';
   document.getElementById('progressStatus').textContent = 'Scanning...';
 
-  let evtSource;
+  var evtSource;
   try {
     evtSource = new EventSource('/api/run/progress?dir=' + encodeURIComponent(dir));
   } catch {
     document.getElementById('progressStatus').textContent = 'Connection failed';
     document.getElementById('startRunBtn').disabled = false;
-    document.getElementById('startRunBtn').innerHTML = '<polygon points="5 3 19 12 5 21 5 3"/> Start sorting';
+    document.getElementById('startRunBtn').innerHTML = 'Start sorting';
     return;
   }
 
   evtSource.onmessage = function(e) {
-    let data;
+    var data;
     try { data = JSON.parse(e.data); } catch { return; }
 
     if (data.type === 'progress') {
       document.getElementById('progressFill').style.width = data.percent + '%';
       document.getElementById('progressFiles').textContent = data.processed + ' / ' + data.total + ' files';
       document.getElementById('progressHits').textContent = data.hits + ' hits';
-      document.getElementById('progressStatus').textContent = 'Processing...';
+      if (data.check_status) {
+        document.getElementById('progressTitle').textContent = 'Checking cookies';
+        document.getElementById('checkProgress').style.display = 'block';
+        document.getElementById('checkCount').textContent = data.checked + ' / ' + (data.check_total || '?') + ' checked';
+        document.getElementById('checkValid').textContent = data.valid + ' valid';
+        document.getElementById('checkInvalid').textContent = data.invalid + ' invalid';
+        document.getElementById('checkFill').style.width = data.percent + '%';
+        document.getElementById('progressStatus').textContent = data.check_status;
+      } else {
+        document.getElementById('progressStatus').textContent = 'Processing...';
+      }
     } else if (data.type === 'complete') {
       evtSource.close();
+      document.getElementById('progressTitle').textContent = 'Processing';
+      document.getElementById('checkProgress').style.display = 'none';
       document.getElementById('progressFill').style.width = '100%';
       document.getElementById('progressStatus').textContent = 'Done';
       document.getElementById('startRunBtn').disabled = false;
-      document.getElementById('startRunBtn').innerHTML = '<polygon points="5 3 19 12 5 21 5 3"/> Start sorting';
+      document.getElementById('startRunBtn').innerHTML = 'Start sorting';
       document.getElementById('runResultPanel').style.display = 'block';
       renderRunComplete(data);
       refreshDashboard();
       refreshHistory();
     } else if (data.type === 'error') {
       evtSource.close();
+      document.getElementById('progressTitle').textContent = 'Processing';
+      document.getElementById('checkProgress').style.display = 'none';
       document.getElementById('progressStatus').textContent = 'Error: ' + (data.message || 'unknown');
       document.getElementById('startRunBtn').disabled = false;
-      document.getElementById('startRunBtn').innerHTML = '<polygon points="5 3 19 12 5 21 5 3"/> Start sorting';
+      document.getElementById('startRunBtn').innerHTML = 'Start sorting';
     }
   };
   evtSource.onerror = function() {
     evtSource.close();
     document.getElementById('progressStatus').textContent = 'Connection lost';
     document.getElementById('startRunBtn').disabled = false;
-    document.getElementById('startRunBtn').innerHTML = '<polygon points="5 3 19 12 5 21 5 3"/> Start sorting';
+    document.getElementById('startRunBtn').innerHTML = 'Start sorting';
   };
 }
 
 function renderRunComplete(data) {
-  const el = document.getElementById('runSummary');
-  const breakdown = data.domain_breakdown ? Object.entries(data.domain_breakdown).sort((a, b) => b[1] - a[1]) : [];
-  el.innerHTML = `
-    <div class="summary-row"><span class="label">Run ID</span><span class="value">${esc(data.run_id)}</span></div>
-    <div class="summary-row"><span class="label">Files scanned</span><span class="value">${data.files_scanned}</span></div>
-    <div class="summary-row"><span class="label">Total cookies</span><span class="value">${data.total_cookies}</span></div>
-    <div class="summary-row"><span class="label">Total hits</span><span class="value">${data.total_hits}</span></div>
-    <div class="summary-row"><span class="label">Errors</span><span class="value">${data.errors}</span></div>
-    <div class="summary-row"><span class="label">Time</span><span class="value">${data.elapsed_seconds.toFixed(1)}s</span></div>
-    <div class="summary-row"><span class="label">Output</span><span class="value" style="font-size:11px;word-break:break-all">${esc(data.output_dir)}</span></div>
-    ${breakdown.length ? `<div class="summary-heading">Hits by domain</div>
-      ${breakdown.map(([d, c]) => `<div class="domain-row"><span>${esc(d)}</span><span class="hits">${c}</span></div>`).join('')}` : ''}
-  `;
+  var el = document.getElementById('runSummary');
+  var entries = data.domain_breakdown ? Object.entries(data.domain_breakdown).sort(function(a, b) { return b[1] - a[1]; }) : [];
+  var checkHtml = '';
+  if (data.checked > 0) {
+    checkHtml = '<div class="summary-row"><span class="label">Cookies checked</span><span class="value">' + data.checked + '</span></div>' +
+      '<div class="summary-row"><span class="label">Valid</span><span class="value" style="color:var(--green)">' + data.valid + '</span></div>' +
+      '<div class="summary-row"><span class="label">Invalid</span><span class="value" style="color:var(--red)">' + data.invalid + '</span></div>';
+  }
+  var domainHtml = '';
+  if (entries.length) {
+    domainHtml = '<div class="summary-heading">Hits by domain</div>' +
+      entries.slice(0, 30).map(function(e) { return '<div class="domain-row"><span>' + esc(e[0]) + '</span><span class="hits">' + e[1] + '</span></div>'; }).join('');
+    if (entries.length > 30) domainHtml += '<p class="text-muted" style="margin-top:8px">... and ' + (entries.length - 30) + ' more</p>';
+  }
+  el.innerHTML =
+    '<div class="summary-row"><span class="label">Run ID</span><span class="value">' + esc(data.run_id) + '</span></div>' +
+    '<div class="summary-row"><span class="label">Files scanned</span><span class="value">' + data.files_scanned + '</span></div>' +
+    '<div class="summary-row"><span class="label">Total cookies</span><span class="value">' + data.total_cookies + '</span></div>' +
+    '<div class="summary-row"><span class="label">Total hits</span><span class="value">' + data.total_hits + '</span></div>' +
+    checkHtml +
+    '<div class="summary-row"><span class="label">Errors</span><span class="value">' + data.errors + '</span></div>' +
+    '<div class="summary-row"><span class="label">Time</span><span class="value">' + data.elapsed_seconds.toFixed(1) + 's</span></div>' +
+    '<div class="summary-row"><span class="label">Output</span><span class="value" style="font-size:11px;word-break:break-all">' + esc(data.output_dir) + '</span></div>' +
+    domainHtml;
 }
 
 /* ── History ── */
 async function refreshHistory() {
-  const el = document.getElementById('historyList');
+  var el = document.getElementById('historyList');
   try {
-    const runs = await api('GET', '/api/runs');
+    var runs = await api('GET', '/api/runs');
     if (!runs.length) {
       el.innerHTML = '<p class="text-muted" style="padding:12px 0">No runs yet.</p>';
       return;
     }
-    el.innerHTML = runs.map(r => `
-      <div class="history-row" onclick="viewRun('${r.run_id}')">
-        <div>
-          <div class="run-id">${esc(r.run_id)}</div>
-          <div class="run-meta">
-            <span>${r.files_scanned} files</span>
-            <span>${r.total_cookies} cookies</span>
-            <span>${r.elapsed_seconds.toFixed(1)}s</span>
-          </div>
-        </div>
-        <span class="hit-count">${r.total_hits} hit${r.total_hits !== 1 ? 's' : ''}</span>
-      </div>
-    `).join('');
+    el.innerHTML = runs.map(function(r) { return (
+      '<div class="history-row" onclick="viewRun(\'' + r.run_id + '\')">' +
+        '<div>' +
+          '<div class="run-id">' + esc(r.run_id) + '</div>' +
+          '<div class="run-meta">' +
+            '<span>' + r.files_scanned + ' files</span>' +
+            '<span>' + r.total_cookies + ' cookies</span>' +
+            '<span>' + r.elapsed_seconds.toFixed(1) + 's</span>' +
+          '</div>' +
+        '</div>' +
+        '<span class="hit-count">' + r.total_hits + ' hit' + (r.total_hits !== 1 ? 's' : '') + '</span>' +
+      '</div>'
+    ); }).join('');
   } catch {
     el.innerHTML = '<p class="text-muted" style="padding:12px 0">Error loading history.</p>';
   }
 }
 
 async function viewRun(runId) {
-  let r;
+  var r;
   try { r = await api('GET', '/api/runs/' + runId); } catch { return; }
-  const breakdown = r.domain_breakdown ? Object.entries(r.domain_breakdown).sort((a, b) => b[1] - a[1]) : [];
-  showModal('Run: ' + runId, `
-    <div class="summary-row"><span class="label">Run ID</span><span class="value">${esc(r.run_id)}</span></div>
-    <div class="summary-row"><span class="label">Timestamp</span><span class="value">${r.timestamp || '—'}</span></div>
-    <div class="summary-row"><span class="label">Source</span><span class="value" style="font-size:11px;word-break:break-all">${esc(r.source_directory || '')}</span></div>
-    <div class="summary-row"><span class="label">Files scanned</span><span class="value">${r.files_scanned}</span></div>
-    <div class="summary-row"><span class="label">Total cookies</span><span class="value">${r.total_cookies}</span></div>
-    <div class="summary-row"><span class="label">Total hits</span><span class="value">${r.total_hits}</span></div>
-    <div class="summary-row"><span class="label">Errors</span><span class="value">${r.errors}</span></div>
-    <div class="summary-row"><span class="label">Time</span><span class="value">${r.elapsed_seconds.toFixed(1)}s</span></div>
-    <div class="summary-row"><span class="label">Filters used</span><span class="value">${(r.filters_used || []).length}</span></div>
-    ${breakdown.length ? `<div class="summary-heading">Hits by domain</div>
-      ${breakdown.slice(0, 40).map(([d, c]) => `<div class="domain-row"><span>${esc(d)}</span><span class="hits">${c}</span></div>`).join('')}
-      ${breakdown.length > 40 ? '<p class="text-muted" style="margin-top:8px">... and ' + (breakdown.length - 40) + ' more</p>' : ''}` : ''}
-  `, `
-    <button class="btn btn-primary" onclick="closeModal()">Close</button>
-  `);
+  var entries = r.domain_breakdown ? Object.entries(r.domain_breakdown).sort(function(a, b) { return b[1] - a[1]; }) : [];
+  var domainHtml = '';
+  if (entries.length) {
+    domainHtml = '<div class="summary-heading">Hits by domain</div>' +
+      entries.slice(0, 40).map(function(e) { return '<div class="domain-row"><span>' + esc(e[0]) + '</span><span class="hits">' + e[1] + '</span></div>'; }).join('');
+    if (entries.length > 40) domainHtml += '<p class="text-muted" style="margin-top:8px">... and ' + (entries.length - 40) + ' more</p>';
+  }
+  showModal('Run: ' + runId,
+    '<div class="summary-row"><span class="label">Run ID</span><span class="value">' + esc(r.run_id) + '</span></div>' +
+    '<div class="summary-row"><span class="label">Timestamp</span><span class="value">' + (r.timestamp || '—') + '</span></div>' +
+    '<div class="summary-row"><span class="label">Source</span><span class="value" style="font-size:11px;word-break:break-all">' + esc(r.source_directory || '') + '</span></div>' +
+    '<div class="summary-row"><span class="label">Files scanned</span><span class="value">' + r.files_scanned + '</span></div>' +
+    '<div class="summary-row"><span class="label">Total cookies</span><span class="value">' + r.total_cookies + '</span></div>' +
+    '<div class="summary-row"><span class="label">Total hits</span><span class="value">' + r.total_hits + '</span></div>' +
+    '<div class="summary-row"><span class="label">Errors</span><span class="value">' + r.errors + '</span></div>' +
+    '<div class="summary-row"><span class="label">Time</span><span class="value">' + r.elapsed_seconds.toFixed(1) + 's</span></div>' +
+    '<div class="summary-row"><span class="label">Filters used</span><span class="value">' + (r.filters_used || []).length + '</span></div>' +
+    domainHtml,
+    '<button class="btn btn-primary" onclick="closeModal()">Close</button>'
+  );
 }
 
 /* ── Modal ── */
