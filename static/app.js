@@ -31,6 +31,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   initDock();
 });
 
+/* ── Asset fallbacks ── */
+
 /* ── NAVIGATION ── */
 function navigate(page) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -270,28 +272,7 @@ function switchSection(name) {
   document.getElementById('sec-' + name).classList.add('active');
 }
 
-/* ── Drop zones ── */
-document.addEventListener('DOMContentLoaded', function() {
-  var dz = document.getElementById('dropZone');
-  if (dz) {
-    dz.addEventListener('click', function() { document.getElementById('importPicker').click(); });
-    dz.addEventListener('dragover', function(e) { e.preventDefault(); dz.classList.add('drag-over'); });
-    dz.addEventListener('dragleave', function() { dz.classList.remove('drag-over'); });
-    dz.addEventListener('drop', function(e) {
-      e.preventDefault();
-      dz.classList.remove('drag-over');
-      var file = e.dataTransfer.files[0];
-      if (file && (file.name.indexOf('.zip') > -1 || file.name.indexOf('.rar') > -1)) {
-        document.getElementById('importPicker').files = e.dataTransfer.files;
-        importArchive(document.getElementById('importPicker'));
-      }
-    });
-  }
-  var pz = document.getElementById('proxyDropZone');
-  if (pz) {
-    pz.addEventListener('click', function() { document.getElementById('proxyFilePicker').click(); });
-  }
-});
+
 
 /* ── Proxy ── */
 function renderProxySettings() {
@@ -300,6 +281,8 @@ function renderProxySettings() {
   document.querySelectorAll('input[name="proxyMode"]').forEach(function(r) { r.checked = r.value === mode; });
   var fg = document.getElementById('proxyFileGroup');
   if (fg) fg.style.display = mode === 'off' ? 'none' : '';
+  var pathInput = document.getElementById('proxyFilePath');
+  if (pathInput) pathInput.value = config.proxy_file || '';
   updateProxyStatus();
 }
 
@@ -308,12 +291,12 @@ function updateProxyMode() {
   if (!mode) return;
   var fg = document.getElementById('proxyFileGroup');
   if (fg) fg.style.display = mode.value === 'off' ? 'none' : '';
-  if (mode.value !== 'off') {
-    api('POST', '/api/config/proxy', { proxy_mode: mode.value, proxy_file: config.proxy_file || '' })
-      .then(function() { return api('GET', '/api/config'); })
-      .then(function(c) { config = c; })
-      .catch(function(e) { console.error(e); });
-  }
+  var pathInput = document.getElementById('proxyFilePath');
+  var proxyFile = pathInput ? pathInput.value.trim() : '';
+  api('POST', '/api/config/proxy', { proxy_mode: mode.value, proxy_file: proxyFile })
+    .then(function() { return api('GET', '/api/config'); })
+    .then(function(c) { config = c; })
+    .catch(function(e) { console.error(e); });
 }
 
 function updateProxyStatus() {
@@ -321,105 +304,23 @@ function updateProxyStatus() {
   if (!el) return;
   var mode = document.querySelector('input[name="proxyMode"]:checked');
   if (!mode || mode.value === 'off') { el.style.display = 'none'; return; }
-  var file = config.proxy_file;
+  var pathInput = document.getElementById('proxyFilePath');
+  var file = pathInput ? pathInput.value.trim() : '';
   if (!file) { el.style.display = 'none'; return; }
   el.style.display = 'block';
+  el.textContent = 'Proxy file: ' + file;
 }
 
-function importProxyFile(input) {
-  var file = input.files[0];
-  if (!file) return;
-  var el = document.getElementById('proxyStatus');
-  el.style.display = 'block';
-  el.textContent = 'Uploading and validating...';
-
-  var formData = new FormData();
-  formData.append('proxy_file', file);
-
-  fetch('/api/config/proxy/import', { method: 'POST', body: formData })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.error) { el.textContent = 'Error: ' + data.error; return; }
-      el.innerHTML = '<span class="proxy-ok">' + data.total + ' proxies</span> &middot; <span class="proxy-valid">' + data.valid + ' valid</span> &middot; <span class="proxy-invalid">' + data.invalid + ' failed</span>';
-      return api('GET', '/api/config');
-    })
-    .then(function(c) { if (c) { config = c; renderProxySettings(); } })
-    .catch(function(e) { el.textContent = 'Import failed: ' + e.message; });
-  input.value = '';
-}
-
-/* ── Import archive ── */
-function importArchive(input) {
-  var file = input.files[0];
-  if (!file) return;
-  if (!config.filters.length) { alert('No filters configured.'); input.value = ''; return; }
-
-  document.getElementById('startRunBtn').disabled = true;
-  document.getElementById('runProgressPanel').style.display = 'block';
-  document.getElementById('runResultPanel').style.display = 'none';
-  document.getElementById('progressFill').style.width = '0%';
-  document.getElementById('progressFiles').textContent = 'Extracting...';
-  document.getElementById('progressHits').textContent = '0 hits';
-  document.getElementById('progressStatus').textContent = 'Uploading...';
-
-  var formData = new FormData();
-  formData.append('archive', file);
-
-  var xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/run/import', true);
-  xhr.setRequestHeader('Accept', 'text/event-stream');
-
-  var lastIndex = 0;
-  xhr.onprogress = function() {
-    var chunk = xhr.responseText.substring(lastIndex);
-    lastIndex = xhr.responseText.length;
-    var lines = chunk.split('\n');
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i].trim();
-      if (line.indexOf('data: ') === 0) {
-        try {
-          var data = JSON.parse(line.substring(6));
-          if (data.type === 'progress') {
-            document.getElementById('progressFill').style.width = data.percent + '%';
-            document.getElementById('progressFiles').textContent = data.processed + ' / ' + data.total + ' files';
-            document.getElementById('progressHits').textContent = data.hits + ' hits';
-            if (data.check_status) {
-              document.getElementById('progressTitle').textContent = 'Checking cookies';
-              document.getElementById('checkProgress').style.display = 'block';
-              document.getElementById('checkCount').textContent = data.checked + ' / ' + (data.check_total || '?') + ' checked';
-              document.getElementById('checkValid').textContent = data.valid + ' valid';
-              document.getElementById('checkInvalid').textContent = data.invalid + ' invalid';
-              document.getElementById('checkFill').style.width = data.percent + '%';
-              document.getElementById('progressStatus').textContent = data.check_status;
-            } else {
-              document.getElementById('progressStatus').textContent = 'Processing...';
-            }
-          } else if (data.type === 'complete') {
-            document.getElementById('progressTitle').textContent = 'Processing';
-            document.getElementById('checkProgress').style.display = 'none';
-            document.getElementById('progressFill').style.width = '100%';
-            document.getElementById('progressStatus').textContent = 'Done';
-            document.getElementById('startRunBtn').disabled = false;
-            document.getElementById('runResultPanel').style.display = 'block';
-            renderRunComplete(data);
-            refreshDashboard();
-            refreshHistory();
-          } else if (data.type === 'error') {
-            document.getElementById('progressTitle').textContent = 'Processing';
-            document.getElementById('checkProgress').style.display = 'none';
-            document.getElementById('progressStatus').textContent = 'Error: ' + (data.message || 'unknown');
-            document.getElementById('startRunBtn').disabled = false;
-          }
-        } catch(e) {}
-      }
-    }
-  };
-  xhr.onerror = function() {
-    document.getElementById('progressStatus').textContent = 'Upload failed';
-    document.getElementById('startRunBtn').disabled = false;
-  };
-  xhr.send(formData);
-  input.value = '';
+function saveProxyPath() {
+  var pathInput = document.getElementById('proxyFilePath');
+  if (!pathInput) return;
+  var path = pathInput.value.trim();
+  var mode = document.querySelector('input[name="proxyMode"]:checked');
+  var proxyMode = mode ? mode.value : 'off';
+  api('POST', '/api/config/proxy', { proxy_mode: proxyMode, proxy_file: path })
+    .then(function() { return api('GET', '/api/config'); })
+    .then(function(c) { config = c; updateProxyStatus(); })
+    .catch(function(e) { console.error(e); });
 }
 
 /* ── Run ── */

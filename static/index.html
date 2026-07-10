@@ -24,7 +24,7 @@
         <div id="brandFallbackTop" class="topbar-logo topbar-logo-fallback" style="display:none">RS</div>
         <span class="topbar-title">Retard Sorter</span>
       </a>
-          <span class="topbar-version">v1.5.1</span>
+          <span class="topbar-version">v1.5.2</span>
     </div>
     <div class="topbar-right">
       <span class="credits-pill">
@@ -87,14 +87,7 @@
               </div>
               <svg class="list-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
             </div>
-            <div class="list-item" onclick="document.getElementById('importPicker').click()">
-              <div class="list-radio"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></div>
-              <div class="list-body">
-                <div class="list-title">Import archive</div>
-                <div class="list-sub">Upload a .zip or .rar of cookie files</div>
-              </div>
-              <svg class="list-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-            </div>
+
           </div>
         </div>
       </div>
@@ -138,10 +131,7 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
             Directory
           </button>
-          <button class="section-tab" data-section="import" onclick="switchSection('import')">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            Import ZIP/RAR
-          </button>
+
           <button class="section-tab" data-section="proxy" onclick="switchSection('proxy')">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
             Proxies
@@ -153,17 +143,6 @@
             <label for="runSourceDir">Source directory</label>
             <p class="form-hint">Full path to the folder containing Netscape cookie files</p>
             <input type="text" id="runSourceDir" placeholder="C:\Users\user\cookies\input">
-          </div>
-        </div>
-
-        <div class="section-panel" id="sec-import">
-          <div class="drop-zone" id="dropZone">
-            <input type="file" id="importPicker" accept=".zip,.rar" style="display:none" onchange="importArchive(this)">
-            <div class="drop-content">
-              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-              <p class="drop-title">Drop .zip or .rar here</p>
-              <p class="drop-hint">or click to browse</p>
-            </div>
           </div>
         </div>
 
@@ -179,15 +158,9 @@
             </div>
           </div>
           <div class="form-group" id="proxyFileGroup">
-            <label>Import proxy list</label>
-            <p class="form-hint">Upload a .txt file with one proxy per line (ip:port or ip:port:user:pass)</p>
-            <div class="drop-zone" id="proxyDropZone" style="padding:24px 20px;cursor:pointer">
-              <input type="file" id="proxyFilePicker" accept=".txt" style="display:none" onchange="importProxyFile(this)">
-              <div class="drop-content" style="gap:6px">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
-                <p class="drop-title" style="font-size:13px">Choose proxies.txt</p>
-              </div>
-            </div>
+            <label>Proxy file path</label>
+            <p class="form-hint">Full path to a .txt file with one proxy per line (ip:port or ip:port:user:pass)</p>
+            <input type="text" id="proxyFilePath" placeholder="C:\Users\user\proxies.txt" onchange="saveProxyPath()">
             <div id="proxyStatus" style="display:none"></div>
           </div>
         </div>

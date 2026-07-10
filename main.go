@@ -1,8 +1,7 @@
 package main
 
 import (
-	"archive/zip"
-	"bytes"
+	"context"
 	"crypto/tls"
 	"embed"
 	"encoding/json"
@@ -18,12 +17,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
-
-	"github.com/nwaples/rardecode"
 )
 
-const Version = "1.5.1"
+const Version = "1.5.2"
 
 //go:embed static/*
 var staticFiles embed.FS
@@ -95,6 +93,11 @@ type ProgressEvent struct {
 	CheckStatus     string         `json:"check_status,omitempty"` // "idle","checking","done"
 }
 
+type checkTask struct {
+	domain  string
+	cookies []Cookie
+}
+
 var (
 	cfg       *Config
 	cfgMu     sync.RWMutex
@@ -103,7 +106,21 @@ var (
 	assetsDir string
 	proxies   []string
 	proxiesMu sync.Mutex
+
+	sharedTransport = &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		MaxIdleConns:    100,
+		IdleConnTimeout: 30 * time.Second,
+	}
 )
+
+func safeSSE(w http.ResponseWriter, flusher http.Flusher, ev ProgressEvent) {
+	defer func() { recover() }()
+	fmt.Fprintf(w, "data: %s\n\n", mustJSON(ev))
+	if flusher != nil {
+		flusher.Flush()
+	}
+}
 
 func getExeDir() string {
 	exe, err := os.Executable()
@@ -312,51 +329,6 @@ func buildProxyURL(raw, mode string) string {
 	}
 }
 
-func randomProxy(mode string) string {
-	proxiesMu.Lock()
-	defer proxiesMu.Unlock()
-	if len(proxies) == 0 {
-		return ""
-	}
-	return buildProxyURL(proxies[rand.Intn(len(proxies))], mode)
-}
-
-func validateProxies(mode string) (valid, invalid int) {
-	proxiesMu.Lock()
-	list := make([]string, len(proxies))
-	copy(list, proxies)
-	proxiesMu.Unlock()
-	testURL := "https://www.google.com"
-	for _, raw := range list {
-		pu := buildProxyURL(raw, mode)
-		if pu == "" {
-			invalid++
-			continue
-		}
-		p, e := url.Parse(pu)
-		if e != nil {
-			invalid++
-			continue
-		}
-		transport := &http.Transport{
-			Proxy:           http.ProxyURL(p),
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}
-		c := &http.Client{Transport: transport, Timeout: 15 * time.Second}
-		resp, err := c.Get(testURL)
-		if err != nil {
-			invalid++
-			transport.CloseIdleConnections()
-			continue
-		}
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
-		transport.CloseIdleConnections()
-		valid++
-	}
-	return
-}
-
 func checkDomainCookies(domain string, cookies []Cookie, proxyURL string) bool {
 	u := "https://" + domain + "/"
 	req, err := http.NewRequest("GET", u, nil)
@@ -366,7 +338,6 @@ func checkDomainCookies(domain string, cookies []Cookie, proxyURL string) bool {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
-	req.Header.Set("Connection", "keep-alive")
 	for _, c := range cookies {
 		req.AddCookie(&http.Cookie{
 			Name:   c.Name,
@@ -381,20 +352,14 @@ func checkDomainCookies(domain string, cookies []Cookie, proxyURL string) bool {
 		if e != nil {
 			return false
 		}
-		client = &http.Client{
-			Transport: &http.Transport{
-				Proxy:           http.ProxyURL(p),
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
-			Timeout: 15 * time.Second,
+		tr := &http.Transport{
+			Proxy:           http.ProxyURL(p),
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		}
+		defer tr.CloseIdleConnections()
+		client = &http.Client{Transport: tr, Timeout: 15 * time.Second}
 	} else {
-		client = &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
-			Timeout: 15 * time.Second,
-		}
+		client = &http.Client{Transport: sharedTransport, Timeout: 15 * time.Second}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -482,7 +447,7 @@ func handleRunDetail(w http.ResponseWriter, r *http.Request, runID string) {
 	writeJSON(w, s)
 }
 
-func processFileLoop(w http.ResponseWriter, flusher http.Flusher, filters []string, dir, hitsDir, timestamp, proxyMode, proxyFile string) (Summary, bool) {
+func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, filters []string, dir, hitsDir, timestamp, proxyMode, proxyFile string) (Summary, bool) {
 	now := time.Now()
 
 	var files []string
@@ -507,7 +472,6 @@ func processFileLoop(w http.ResponseWriter, flusher http.Flusher, filters []stri
 	errors := 0
 	startTime := time.Now()
 
-	// Collect all hits grouped by source file for cookie checking
 	type fileHitsInfo struct {
 		relPath string
 		cookies []Cookie
@@ -516,15 +480,20 @@ func processFileLoop(w http.ResponseWriter, flusher http.Flusher, filters []stri
 	var allFileHits []fileHitsInfo
 
 	for idx, filePath := range files {
+		select {
+		case <-ctx.Done():
+			return Summary{}, false
+		default:
+		}
+
 		relPath, _ := filepath.Rel(dir, filePath)
 		cookies, err := parseNetscapeCookieFile(filePath)
 		if err != nil {
 			errors++
-			fmt.Fprintf(w, "data: %s\n\n", mustJSON(ProgressEvent{
+			safeSSE(w, flusher, ProgressEvent{
 				Type: "progress", Processed: idx + 1, Total: totalFiles,
 				Hits: totalHits, Percent: float64(idx+1) / float64(totalFiles) * 100,
-			}))
-			flusher.Flush()
+			})
 			continue
 		}
 
@@ -545,7 +514,6 @@ func processFileLoop(w http.ResponseWriter, flusher http.Flusher, filters []stri
 			allFileHits = append(allFileHits, fileHitsInfo{relPath, fileHits, domains})
 		}
 
-		// Write hits file
 		if len(fileHits) > 0 {
 			flatName := strings.ReplaceAll(relPath, " ", "_")
 			flatName = strings.ReplaceAll(flatName, "/", "_")
@@ -576,11 +544,10 @@ func processFileLoop(w http.ResponseWriter, flusher http.Flusher, filters []stri
 			}
 		}
 
-		fmt.Fprintf(w, "data: %s\n\n", mustJSON(ProgressEvent{
+		safeSSE(w, flusher, ProgressEvent{
 			Type: "progress", Processed: idx + 1, Total: totalFiles,
 			Hits: totalHits, Percent: float64(idx+1) / float64(totalFiles) * 100,
-		}))
-		flusher.Flush()
+		})
 	}
 
 	checked := 0
@@ -588,53 +555,111 @@ func processFileLoop(w http.ResponseWriter, flusher http.Flusher, filters []stri
 	invalid := 0
 
 	if (proxyMode == "http" || proxyMode == "socks4" || proxyMode == "socks5") && len(allFileHits) > 0 {
-		totalChecks := 0
+		var tasks []checkTask
 		for _, fh := range allFileHits {
-			totalChecks += len(fh.domains)
+			for domain, cookies := range fh.domains {
+				tasks = append(tasks, checkTask{domain, cookies})
+			}
 		}
+		totalChecks := len(tasks)
 
-		fmt.Fprintf(w, "data: %s\n\n", mustJSON(ProgressEvent{
+		safeSSE(w, flusher, ProgressEvent{
 			Type: "progress", Processed: totalFiles, Total: totalFiles,
 			Hits: totalHits, Percent: 100, Checked: 0, CheckTotal: totalChecks, CheckStatus: "loading proxies",
-		}))
-		flusher.Flush()
+		})
 
 		if proxyFile != "" {
 			if err := loadProxies(proxyFile); err != nil {
-				fmt.Fprintf(w, "data: %s\n\n", mustJSON(ProgressEvent{
+				safeSSE(w, flusher, ProgressEvent{
 					Type: "progress", Processed: totalFiles, Total: totalFiles,
 					Hits: totalHits, Percent: 100, Checked: 0, CheckTotal: totalChecks, CheckStatus: "proxy load failed: " + err.Error(),
-				}))
-				flusher.Flush()
+				})
 			}
 		}
-		checkIdx := 0
-		for _, fh := range allFileHits {
-			for domain, cookies := range fh.domains {
-				checkIdx++
-				pct := float64(checkIdx) / float64(totalChecks) * 100
-				fmt.Fprintf(w, "data: %s\n\n", mustJSON(ProgressEvent{
-					Type: "progress", Processed: totalFiles, Total: totalFiles,
-					Hits: totalHits, Percent: pct, Checked: checkIdx, CheckTotal: totalChecks,
-					Valid: valid, Invalid: invalid, CheckStatus: fmt.Sprintf("checking %s (%d/%d)", domain, checkIdx, totalChecks),
-				}))
-				flusher.Flush()
 
-				proxyURL := ""
-				proxiesMu.Lock()
-				hasProxies := len(proxies) > 0
-				proxiesMu.Unlock()
-				if hasProxies {
-					proxyURL = randomProxy(proxyMode)
-				}
-				checked++
-				if checkDomainCookies(domain, cookies, proxyURL) {
-					valid++
-				} else {
-					invalid++
+		var completed int64
+		var valids int64
+		progressDone := make(chan struct{})
+
+		var progressWG sync.WaitGroup
+		progressWG.Add(1)
+		go func() {
+			defer progressWG.Done()
+			ticker := time.NewTicker(200 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-progressDone:
+					return
+				case <-ticker.C:
+					c := atomic.LoadInt64(&completed)
+					if c == 0 {
+						continue
+					}
+					v := atomic.LoadInt64(&valids)
+					safeSSE(w, flusher, ProgressEvent{
+						Type: "progress", Processed: totalFiles, Total: totalFiles,
+						Hits: totalHits, Percent: float64(c) / float64(totalChecks) * 100,
+						Checked: int(c), CheckTotal: totalChecks,
+						Valid: int(v), Invalid: int(c - v),
+						CheckStatus: fmt.Sprintf("checking %d/%d", c, totalChecks),
+					})
+				case <-ctx.Done():
+					return
 				}
 			}
+		}()
+
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, 20)
+
+		for _, task := range tasks {
+			select {
+			case <-ctx.Done():
+				wg.Wait()
+				close(progressDone)
+				progressWG.Wait()
+				c := atomic.LoadInt64(&completed)
+				v := atomic.LoadInt64(&valids)
+				return Summary{
+					RunID: timestamp, Timestamp: now.Format(time.RFC3339),
+					FilesScanned: totalFiles, TotalCookies: totalCookies,
+					TotalHits: totalHits, CheckedCookies: int(c), ValidCookies: int(v),
+					InvalidCookies: int(c - v), Errors: errors,
+					ElapsedSeconds: time.Since(startTime).Seconds(),
+					FiltersUsed: filters, SourceDirectory: dir,
+					DomainBreakdown: domainHits, OutputDir: runDir,
+				}, true
+			default:
+			}
+
+			wg.Add(1)
+			go func(t checkTask) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				var pu string
+				proxiesMu.Lock()
+				if len(proxies) > 0 {
+					pu = buildProxyURL(proxies[rand.Intn(len(proxies))], proxyMode)
+				}
+				proxiesMu.Unlock()
+
+				if checkDomainCookies(t.domain, t.cookies, pu) {
+					atomic.AddInt64(&valids, 1)
+				}
+				atomic.AddInt64(&completed, 1)
+			}(task)
 		}
+
+		wg.Wait()
+		close(progressDone)
+		progressWG.Wait()
+
+		c := atomic.LoadInt64(&completed)
+		v := atomic.LoadInt64(&valids)
+		checked, valid, invalid = int(c), int(v), int(c-v)
 	}
 
 	elapsed := time.Since(startTime).Seconds()
@@ -692,7 +717,7 @@ func handleRunProgress(w http.ResponseWriter, r *http.Request) {
 	hitsDir := filepath.Join(runDir, "hits")
 	os.MkdirAll(hitsDir, 0755)
 
-	summary, ok := processFileLoop(w, flusher, filters, dir, hitsDir, timestamp, proxyMode, proxyFile)
+	summary, ok := processFileLoop(r.Context(), w, flusher, filters, dir, hitsDir, timestamp, proxyMode, proxyFile)
 	if !ok {
 		writeSSE(w, ProgressEvent{Type: "error", Message: "no files in directory"})
 		return
@@ -706,7 +731,7 @@ func handleRunProgress(w http.ResponseWriter, r *http.Request) {
 	saveConfig(cfg)
 	cfgMu.Unlock()
 
-	fmt.Fprintf(w, "data: %s\n\n", mustJSON(ProgressEvent{
+	safeSSE(w, flusher, ProgressEvent{
 		Type:            "complete",
 		RunID:           summary.RunID,
 		FilesScanned:    summary.FilesScanned,
@@ -719,108 +744,7 @@ func handleRunProgress(w http.ResponseWriter, r *http.Request) {
 		ElapsedSeconds:  summary.ElapsedSeconds,
 		OutputDir:       summary.OutputDir,
 		DomainBreakdown: summary.DomainBreakdown,
-	}))
-	flusher.Flush()
-}
-
-func handleImportRun(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "method not allowed", 405)
-		return
-	}
-
-	cfgMu.RLock()
-	filters := make([]string, len(cfg.Filters))
-	copy(filters, cfg.Filters)
-	proxyMode := cfg.ProxyMode
-	proxyFile := cfg.ProxyFile
-	cfgMu.RUnlock()
-
-	if len(filters) == 0 {
-		writeJSON(w, map[string]string{"error": "no filters configured"})
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, 200<<20)
-	if err := r.ParseMultipartForm(100 << 20); err != nil {
-		writeJSON(w, map[string]string{"error": "file too large or invalid multipart"})
-		return
-	}
-
-	file, header, err := r.FormFile("archive")
-	if err != nil {
-		writeJSON(w, map[string]string{"error": "missing archive file"})
-		return
-	}
-	defer file.Close()
-
-	tmpDir, err := os.MkdirTemp("", "retard-import-*")
-	if err != nil {
-		writeJSON(w, map[string]string{"error": "failed to create temp dir"})
-		return
-	}
-	defer os.RemoveAll(tmpDir)
-
-	lower := strings.ToLower(header.Filename)
-	switch {
-	case strings.HasSuffix(lower, ".zip"):
-		err = extractZip(file, tmpDir)
-	case strings.HasSuffix(lower, ".rar"):
-		err = extractRar(file, tmpDir)
-	default:
-		os.RemoveAll(tmpDir)
-		writeJSON(w, map[string]string{"error": "unsupported format, use .zip or .rar"})
-		return
-	}
-	if err != nil {
-		os.RemoveAll(tmpDir)
-		writeJSON(w, map[string]string{"error": "extraction failed: " + err.Error()})
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	flusher, _ := w.(http.Flusher)
-
-	now := time.Now()
-	timestamp := now.Format("20060102_150405")
-	runDir := filepath.Join(resDir, "run_"+timestamp)
-	hitsDir := filepath.Join(runDir, "hits")
-	os.MkdirAll(hitsDir, 0755)
-
-	summary, ok := processFileLoop(w, flusher, filters, tmpDir, hitsDir, timestamp, proxyMode, proxyFile)
-	if !ok {
-		fmt.Fprintf(w, "data: %s\n\n", mustJSON(ProgressEvent{
-			Type: "error", Message: "no cookie files found in archive",
-		}))
-		flusher.Flush()
-		return
-	}
-
-	sumData, _ := json.MarshalIndent(summary, "", "  ")
-	os.WriteFile(filepath.Join(runDir, "summary.json"), sumData, 0644)
-
-	cfgMu.Lock()
-	cfg.LastRun = summary.RunID
-	saveConfig(cfg)
-	cfgMu.Unlock()
-
-	fmt.Fprintf(w, "data: %s\n\n", mustJSON(ProgressEvent{
-		Type:            "complete",
-		RunID:           summary.RunID,
-		FilesScanned:    summary.FilesScanned,
-		TotalCookies:    summary.TotalCookies,
-		TotalHits:       summary.TotalHits,
-		Checked:         summary.CheckedCookies,
-		Valid:           summary.ValidCookies,
-		Invalid:         summary.InvalidCookies,
-		Errors:          summary.Errors,
-		ElapsedSeconds:  summary.ElapsedSeconds,
-		OutputDir:       summary.OutputDir,
-		DomainBreakdown: summary.DomainBreakdown,
-	}))
-	flusher.Flush()
+	})
 }
 
 func handleProxyConfig(w http.ResponseWriter, r *http.Request) {
@@ -856,123 +780,6 @@ func handleProxyConfig(w http.ResponseWriter, r *http.Request) {
 	handleConfig(w, r)
 }
 
-func handleProxyImport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "method not allowed", 405)
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
-	if err := r.ParseMultipartForm(5 << 20); err != nil {
-		writeJSON(w, map[string]string{"error": "file too large"})
-		return
-	}
-	file, _, err := r.FormFile("proxy_file")
-	if err != nil {
-		writeJSON(w, map[string]string{"error": "missing proxy_file"})
-		return
-	}
-	defer file.Close()
-	content, err := io.ReadAll(file)
-	if err != nil {
-		writeJSON(w, map[string]string{"error": "read failed"})
-		return
-	}
-	savePath := filepath.Join(assetsDir, "proxies.txt")
-	if err := os.WriteFile(savePath, content, 0644); err != nil {
-		writeJSON(w, map[string]string{"error": "save failed"})
-		return
-	}
-	if err := loadProxies(savePath); err != nil {
-		writeJSON(w, map[string]string{"error": "parse failed"})
-		return
-	}
-	cfgMu.Lock()
-	mode := cfg.ProxyMode
-	if mode == "" || mode == "off" {
-		mode = "http"
-	}
-	cfg.ProxyFile = savePath
-	cfg.ProxyMode = mode
-	saveConfig(cfg)
-	cfgMu.Unlock()
-	valid, invalid := validateProxies(mode)
-	proxiesMu.Lock()
-	total := len(proxies)
-	proxiesMu.Unlock()
-	writeJSON(w, map[string]interface{}{
-		"status":  "ok",
-		"total":   total,
-		"valid":   valid,
-		"invalid": invalid,
-		"file":    savePath,
-	})
-}
-
-func extractZip(src io.Reader, dest string) error {
-	data, err := io.ReadAll(src)
-	if err != nil {
-		return err
-	}
-	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return err
-	}
-	for _, f := range zr.File {
-		fpath := filepath.Join(dest, f.Name)
-		if f.FileInfo().IsDir() {
-			os.MkdirAll(fpath, 0755)
-			continue
-		}
-		os.MkdirAll(filepath.Dir(fpath), 0755)
-		rc, err := f.Open()
-		if err != nil {
-			continue
-		}
-		out, err := os.Create(fpath)
-		if err != nil {
-			rc.Close()
-			continue
-		}
-		io.Copy(out, rc)
-		rc.Close()
-		out.Close()
-	}
-	return nil
-}
-
-func extractRar(src io.Reader, dest string) error {
-	data, err := io.ReadAll(src)
-	if err != nil {
-		return err
-	}
-	rr, err := rardecode.NewReader(bytes.NewReader(data), "")
-	if err != nil {
-		return err
-	}
-	for {
-		hdr, err := rr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			continue
-		}
-		fpath := filepath.Join(dest, hdr.Name)
-		if hdr.IsDir {
-			os.MkdirAll(fpath, 0755)
-			continue
-		}
-		os.MkdirAll(filepath.Dir(fpath), 0755)
-		out, err := os.Create(fpath)
-		if err != nil {
-			continue
-		}
-		io.Copy(out, rr)
-		out.Close()
-	}
-	return nil
-}
-
 // === HELPERS ===
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
@@ -1004,7 +811,7 @@ func openBrowser(url string) {
 		cmd = "xdg-open"
 	default:
 		cmd = "cmd"
-		args = []string{"/c", "start", url}
+		args = []string{"/c", "start"}
 	}
 	os.StartProcess(cmd, append(args, url), &os.ProcAttr{Files: []*os.File{nil, nil, nil}})
 }
@@ -1024,10 +831,8 @@ func main() {
 	mux.HandleFunc("/api/config", handleConfig)
 	mux.HandleFunc("/api/config/filters", handleUpdateFilters)
 	mux.HandleFunc("/api/config/proxy", handleProxyConfig)
-	mux.HandleFunc("/api/config/proxy/import", handleProxyImport)
 	mux.HandleFunc("/api/runs", handleRuns)
 	mux.HandleFunc("/api/run/progress", handleRunProgress)
-	mux.HandleFunc("/api/run/import", handleImportRun)
 	mux.HandleFunc("/api/runs/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/api/runs/")
 		if path == "" {

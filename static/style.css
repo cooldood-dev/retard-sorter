@@ -389,23 +389,6 @@ body {
 .section-panel { display: none; padding: 20px 24px; }
 .section-panel.active { display: block; }
 
-/* ── Drop zone ── */
-.drop-zone {
-  border: 2px dashed var(--border-hl);
-  border-radius: var(--radius-sm);
-  padding: 36px 20px;
-  text-align: center;
-  cursor: pointer;
-  transition: all 150ms ease;
-}
-.drop-zone:hover { border-color: var(--accent); background: var(--accent-bg); }
-.drop-zone.drag-over { border-color: var(--accent); background: var(--accent-bg); }
-.drop-content { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.drop-content svg { color: var(--text3); }
-.drop-zone:hover .drop-content svg { color: var(--accent); }
-.drop-title { font-size: 15px; font-weight: 600; color: var(--text); }
-.drop-hint { font-size: 12px; color: var(--text3); }
-
 /* ── Radio group ── */
 .radio-group {
   display: inline-flex;
