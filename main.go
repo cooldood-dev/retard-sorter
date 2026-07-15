@@ -798,6 +798,21 @@ func handleRunProgress(w http.ResponseWriter, r *http.Request) {
 	os.MkdirAll(resRunDir, 0755)
 	os.WriteFile(filepath.Join(resRunDir, "summary.json"), sumData, 0644)
 
+	resHitsDir := filepath.Join(resRunDir, "hits")
+	os.MkdirAll(resHitsDir, 0755)
+	if hitsEntries, err := os.ReadDir(hitsDir); err == nil {
+		for _, e := range hitsEntries {
+			if !e.IsDir() {
+				src := filepath.Join(hitsDir, e.Name())
+				dst := filepath.Join(resHitsDir, e.Name())
+				data, _ := os.ReadFile(src)
+				if data != nil {
+					os.WriteFile(dst, data, 0644)
+				}
+			}
+		}
+	}
+
 	appLog("RUN COMPLETE - files: %d, cookies: %d, hits: %d, errors: %d, time: %.1fs",
 		summary.FilesScanned, summary.TotalCookies, summary.TotalHits, summary.Errors, summary.ElapsedSeconds)
 
