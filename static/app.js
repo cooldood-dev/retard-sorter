@@ -1,5 +1,6 @@
 /* ── State ── */
 let config = null;
+let userName = '';
 
 /* ── API ── */
 async function api(method, path, body) {
@@ -24,11 +25,39 @@ async function api(method, path, body) {
 /* ── Init ── */
 document.addEventListener('DOMContentLoaded', async () => {
   try { config = await api('GET', '/api/config'); } catch { config = { filters: [], last_run: '', proxy_mode: 'off', proxy_file: '' }; }
+  var userData;
+  try { userData = await api('GET', '/api/user'); } catch { userData = {}; }
+  userName = (userData && userData.name) || '';
+  if (!userName) {
+    document.getElementById('firstStartup').style.display = 'flex';
+  } else {
+    document.getElementById('dashUserName').textContent = userName;
+  }
   updateAll();
   renderProxySettings();
   refreshDashboard();
   refreshHistory();
   initDock();
+});
+
+async function saveUserName() {
+  var name = document.getElementById('userNameInput').value.trim();
+  if (!name) { return; }
+  try {
+    await api('POST', '/api/user', { name: name });
+    userName = name;
+    document.getElementById('firstStartup').style.display = 'none';
+    document.getElementById('dashUserName').textContent = userName;
+    refreshDashboard();
+  } catch (e) {
+    alert('Failed to save name: ' + e.message);
+  }
+}
+
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && document.getElementById('firstStartup').style.display === 'flex') {
+    saveUserName();
+  }
 });
 
 /* ── Asset fallbacks ── */
@@ -137,12 +166,17 @@ function updateAll() {
 async function refreshDashboard() {
   try {
     var runs = await api('GET', '/api/runs');
+    var filterCount = (config && config.filters ? config.filters.length : 0);
+    document.getElementById('statFilters').textContent = filterCount;
     document.getElementById('statRuns').textContent = runs.length;
     var files = 0, hits = 0;
     for (var i = 0; i < runs.length; i++) { files += runs[i].files_scanned || 0; hits += runs[i].total_hits || 0; }
     document.getElementById('statFiles').textContent = files.toLocaleString();
     document.getElementById('statHits').textContent = hits.toLocaleString();
     document.getElementById('statHitsBadge').textContent = hits.toLocaleString();
+    document.getElementById('statusFilters').textContent = filterCount;
+    document.getElementById('statusRunsStat').textContent = runs.length;
+    document.getElementById('statusHitsStat').textContent = hits.toLocaleString();
     document.getElementById('dashSubtext').textContent = runs.length
       ? 'Total: ' + files.toLocaleString() + ' files, ' + hits.toLocaleString() + ' hits across ' + runs.length + ' run' + (runs.length !== 1 ? 's' : '')
       : 'No runs yet. Start your first sort.';
@@ -324,11 +358,32 @@ function saveProxyPath() {
 }
 
 /* ── Run ── */
+var runStartTime = 0;
+
+function formatETA(ms) {
+  if (ms <= 0) return '—';
+  var s = Math.ceil(ms / 1000);
+  if (s < 60) return s + 's';
+  var m = Math.floor(s / 60); s = s % 60;
+  if (m < 60) return m + 'm ' + s + 's';
+  var h = Math.floor(m / 60); m = m % 60;
+  return h + 'h ' + m + 'm';
+}
+
+function updateETA(processed, total) {
+  if (processed <= 0) { document.getElementById('etaTimer').textContent = '—'; return; }
+  var elapsed = Date.now() - runStartTime;
+  var rate = processed / elapsed;
+  var remaining = (total - processed) / rate;
+  document.getElementById('etaTimer').textContent = formatETA(remaining);
+}
+
 async function startRun() {
   var dir = document.getElementById('runSourceDir').value.trim();
   if (!dir) { alert('Enter a source directory path.'); return; }
   if (!config.filters.length) { alert('No filters configured. Add at least one target domain.'); return; }
 
+  runStartTime = Date.now();
   document.getElementById('startRunBtn').disabled = true;
   document.getElementById('startRunBtn').innerHTML = 'Processing...';
   document.getElementById('runProgressPanel').style.display = 'block';
@@ -337,6 +392,8 @@ async function startRun() {
   document.getElementById('progressFiles').textContent = '0 / 0 files';
   document.getElementById('progressHits').textContent = '0 hits';
   document.getElementById('progressStatus').textContent = 'Scanning...';
+  document.getElementById('etaTimer').textContent = '—';
+  document.getElementById('etaCard').style.display = 'none';
 
   var evtSource;
   try {
@@ -356,6 +413,8 @@ async function startRun() {
       document.getElementById('progressFill').style.width = data.percent + '%';
       document.getElementById('progressFiles').textContent = data.processed + ' / ' + data.total + ' files';
       document.getElementById('progressHits').textContent = data.hits + ' hits';
+      document.getElementById('etaCard').style.display = 'flex';
+      updateETA(data.processed, data.total);
       if (data.check_status) {
         document.getElementById('progressTitle').textContent = 'Checking cookies';
         document.getElementById('checkProgress').style.display = 'block';
@@ -372,6 +431,7 @@ async function startRun() {
       document.getElementById('progressTitle').textContent = 'Processing';
       document.getElementById('checkProgress').style.display = 'none';
       document.getElementById('progressFill').style.width = '100%';
+      document.getElementById('etaCard').style.display = 'none';
       document.getElementById('progressStatus').textContent = 'Done';
       document.getElementById('startRunBtn').disabled = false;
       document.getElementById('startRunBtn').innerHTML = 'Start sorting';
@@ -417,6 +477,7 @@ function renderRunComplete(data) {
     '<div class="summary-row"><span class="label">Total cookies</span><span class="value">' + data.total_cookies + '</span></div>' +
     '<div class="summary-row"><span class="label">Total hits</span><span class="value">' + data.total_hits + '</span></div>' +
     checkHtml +
+    msHtml +
     '<div class="summary-row"><span class="label">Errors</span><span class="value">' + data.errors + '</span></div>' +
     '<div class="summary-row"><span class="label">Time</span><span class="value">' + data.elapsed_seconds.toFixed(1) + 's</span></div>' +
     '<div class="summary-row"><span class="label">Output</span><span class="value" style="font-size:11px;word-break:break-all">' + esc(data.output_dir) + '</span></div>' +
@@ -470,6 +531,7 @@ async function viewRun(runId) {
     '<div class="summary-row"><span class="label">Errors</span><span class="value">' + r.errors + '</span></div>' +
     '<div class="summary-row"><span class="label">Time</span><span class="value">' + r.elapsed_seconds.toFixed(1) + 's</span></div>' +
     '<div class="summary-row"><span class="label">Filters used</span><span class="value">' + (r.filters_used || []).length + '</span></div>' +
+    msHtml +
     domainHtml,
     '<button class="btn btn-primary" onclick="closeModal()">Close</button>'
   );

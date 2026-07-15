@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-const Version = "1.5.2"
+const Version = "1.6.0"
 
 //go:embed static/*
 var staticFiles embed.FS
@@ -29,7 +29,7 @@ var staticFiles embed.FS
 type Config struct {
 	Filters   []string `json:"filters"`
 	LastRun   string   `json:"last_run"`
-	ProxyMode string   `json:"proxy_mode"` // "off", "http", "socks4", "socks5"
+	ProxyMode string   `json:"proxy_mode"`
 	ProxyFile string   `json:"proxy_file"`
 }
 
@@ -45,20 +45,21 @@ type Cookie struct {
 }
 
 type Summary struct {
-	RunID           string         `json:"run_id"`
-	Timestamp       string         `json:"timestamp"`
-	FilesScanned    int            `json:"files_scanned"`
-	TotalCookies    int            `json:"total_cookies"`
-	TotalHits       int            `json:"total_hits"`
-	CheckedCookies  int            `json:"checked_cookies"`
-	ValidCookies    int            `json:"valid_cookies"`
-	InvalidCookies  int            `json:"invalid_cookies"`
-	Errors          int            `json:"errors"`
-	ElapsedSeconds  float64        `json:"elapsed_seconds"`
-	FiltersUsed     []string       `json:"filters_used"`
-	SourceDirectory string         `json:"source_directory"`
-	DomainBreakdown map[string]int `json:"domain_breakdown"`
-	OutputDir       string         `json:"output_dir"`
+	RunID            string         `json:"run_id"`
+	Timestamp        string         `json:"timestamp"`
+	FilesScanned     int            `json:"files_scanned"`
+	TotalCookies     int            `json:"total_cookies"`
+	TotalHits        int            `json:"total_hits"`
+	CheckedCookies   int            `json:"checked_cookies"`
+	ValidCookies     int            `json:"valid_cookies"`
+	InvalidCookies   int            `json:"invalid_cookies"`
+	Errors           int            `json:"errors"`
+	ElapsedSeconds   float64        `json:"elapsed_seconds"`
+	FiltersUsed      []string       `json:"filters_used"`
+	SourceDirectory  string         `json:"source_directory"`
+	DomainBreakdown  map[string]int `json:"domain_breakdown"`
+	OutputDir        string         `json:"output_dir"`
+	ProfilesDir      string         `json:"profiles_dir"`
 }
 
 type RunEntry struct {
@@ -90,7 +91,7 @@ type ProgressEvent struct {
 	CheckTotal      int            `json:"check_total,omitempty"`
 	Valid           int            `json:"valid,omitempty"`
 	Invalid         int            `json:"invalid,omitempty"`
-	CheckStatus     string         `json:"check_status,omitempty"` // "idle","checking","done"
+	CheckStatus     string         `json:"check_status,omitempty"`
 }
 
 type checkTask struct {
@@ -99,13 +100,16 @@ type checkTask struct {
 }
 
 var (
-	cfg       *Config
-	cfgMu     sync.RWMutex
-	cfgPath   string
-	resDir    string
-	assetsDir string
-	proxies   []string
-	proxiesMu sync.Mutex
+	cfg               *Config
+	cfgMu             sync.RWMutex
+	cfgPath           string
+	resDir            string
+	profilesDir       string
+	assetsDir         string
+	proxies           []string
+	proxiesMu         sync.Mutex
+	logPath           string
+	logMu             sync.Mutex
 
 	sharedTransport = &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
@@ -136,8 +140,27 @@ func initPaths() {
 	cfgPath = filepath.Join(base, "retard_config.json")
 	resDir = filepath.Join(base, "results")
 	assetsDir = filepath.Join(base, "assets")
+	logPath = filepath.Join(base, "retard-sorter.log")
+
+	home, _ := os.UserHomeDir()
+	profilesDir = filepath.Join(home, "Documents", "profiles")
+
 	os.MkdirAll(resDir, 0755)
 	os.MkdirAll(assetsDir, 0755)
+	os.MkdirAll(profilesDir, 0755)
+}
+
+func appLog(format string, args ...interface{}) {
+	logMu.Lock()
+	defer logMu.Unlock()
+	msg := fmt.Sprintf(format, args...)
+	line := fmt.Sprintf("[%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), msg)
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err == nil {
+		f.WriteString(line)
+		f.Close()
+	}
+	fmt.Print(line)
 }
 
 func loadConfig() *Config {
@@ -426,6 +449,34 @@ func handleRuns(w http.ResponseWriter, r *http.Request) {
 			ElapsedSeconds: s.ElapsedSeconds,
 		})
 	}
+
+	profilesEntries, err := os.ReadDir(profilesDir)
+	if err == nil {
+		for _, e := range profilesEntries {
+			if !e.IsDir() || !strings.HasPrefix(e.Name(), "run_") {
+				continue
+			}
+			sumPath := filepath.Join(profilesDir, e.Name(), "summary.json")
+			data, err := os.ReadFile(sumPath)
+			if err != nil {
+				continue
+			}
+			var s Summary
+			if json.Unmarshal(data, &s) != nil {
+				continue
+			}
+			runs = append(runs, RunEntry{
+				RunID:          s.RunID,
+				Timestamp:      s.Timestamp,
+				FilesScanned:   s.FilesScanned,
+				TotalCookies:   s.TotalCookies,
+				TotalHits:      s.TotalHits,
+				Errors:         s.Errors,
+				ElapsedSeconds: s.ElapsedSeconds,
+			})
+		}
+	}
+
 	sort.Slice(runs, func(i, j int) bool {
 		return runs[i].RunID > runs[j].RunID
 	})
@@ -433,18 +484,20 @@ func handleRuns(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleRunDetail(w http.ResponseWriter, r *http.Request, runID string) {
-	sumPath := filepath.Join(resDir, "run_"+runID, "summary.json")
-	data, err := os.ReadFile(sumPath)
-	if err != nil {
-		http.Error(w, "not found", 404)
+	paths := []string{filepath.Join(resDir, "run_"+runID, "summary.json"), filepath.Join(profilesDir, "run_"+runID, "summary.json")}
+	for _, sumPath := range paths {
+		data, err := os.ReadFile(sumPath)
+		if err != nil {
+			continue
+		}
+		var s Summary
+		if json.Unmarshal(data, &s) != nil {
+			continue
+		}
+		writeJSON(w, s)
 		return
 	}
-	var s Summary
-	if json.Unmarshal(data, &s) != nil {
-		http.Error(w, "invalid summary", 500)
-		return
-	}
-	writeJSON(w, s)
+	http.Error(w, "not found", 404)
 }
 
 func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, filters []string, dir, hitsDir, timestamp, proxyMode, proxyFile string) (Summary, bool) {
@@ -465,7 +518,7 @@ func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Fl
 		return Summary{}, false
 	}
 
-	runDir := filepath.Join(resDir, "run_"+timestamp)
+	runDir := filepath.Join(profilesDir, "run_"+timestamp)
 	totalCookies := 0
 	totalHits := 0
 	domainHits := make(map[string]int)
@@ -548,6 +601,10 @@ func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Fl
 			Type: "progress", Processed: idx + 1, Total: totalFiles,
 			Hits: totalHits, Percent: float64(idx+1) / float64(totalFiles) * 100,
 		})
+
+		if (idx+1)%1000 == 0 || idx+1 == totalFiles {
+			appLog("RUN PROGRESS - %d/%d files, %d hits, %d errors", idx+1, totalFiles, totalHits, errors)
+		}
 	}
 
 	checked := 0
@@ -628,7 +685,7 @@ func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Fl
 					InvalidCookies: int(c - v), Errors: errors,
 					ElapsedSeconds: time.Since(startTime).Seconds(),
 					FiltersUsed: filters, SourceDirectory: dir,
-					DomainBreakdown: domainHits, OutputDir: runDir,
+					DomainBreakdown: domainHits, OutputDir: runDir, ProfilesDir: profilesDir,
 				}, true
 			default:
 			}
@@ -678,10 +735,18 @@ func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Fl
 		SourceDirectory: dir,
 		DomainBreakdown: domainHits,
 		OutputDir:       runDir,
+		ProfilesDir:     profilesDir,
 	}, true
 }
 
 func handleRunProgress(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			appLog("PANIC in handleRunProgress: %v", rec)
+			writeSSE(w, ProgressEvent{Type: "error", Message: fmt.Sprintf("internal error: %v", rec)})
+		}
+	}()
+
 	dir := r.URL.Query().Get("dir")
 	if dir == "" {
 		http.Error(w, "missing dir parameter", 400)
@@ -706,6 +771,8 @@ func handleRunProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	appLog("RUN START - directory: %s, filters: %d", dir, len(filters))
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -713,8 +780,9 @@ func handleRunProgress(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now()
 	timestamp := now.Format("20060102_150405")
-	runDir := filepath.Join(resDir, "run_"+timestamp)
-	hitsDir := filepath.Join(runDir, "hits")
+
+	profilesRunDir := filepath.Join(profilesDir, "run_"+timestamp)
+	hitsDir := filepath.Join(profilesRunDir, "hits")
 	os.MkdirAll(hitsDir, 0755)
 
 	summary, ok := processFileLoop(r.Context(), w, flusher, filters, dir, hitsDir, timestamp, proxyMode, proxyFile)
@@ -724,7 +792,14 @@ func handleRunProgress(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sumData, _ := json.MarshalIndent(summary, "", "  ")
-	os.WriteFile(filepath.Join(runDir, "summary.json"), sumData, 0644)
+	os.WriteFile(filepath.Join(profilesRunDir, "summary.json"), sumData, 0644)
+
+	resRunDir := filepath.Join(resDir, "run_"+timestamp)
+	os.MkdirAll(resRunDir, 0755)
+	os.WriteFile(filepath.Join(resRunDir, "summary.json"), sumData, 0644)
+
+	appLog("RUN COMPLETE - files: %d, cookies: %d, hits: %d, errors: %d, time: %.1fs",
+		summary.FilesScanned, summary.TotalCookies, summary.TotalHits, summary.Errors, summary.ElapsedSeconds)
 
 	cfgMu.Lock()
 	cfg.LastRun = summary.RunID
@@ -780,6 +855,61 @@ func handleProxyConfig(w http.ResponseWriter, r *http.Request) {
 	handleConfig(w, r)
 }
 
+// === USER HANDLER ===
+
+var userMu sync.Mutex
+
+type UserData struct {
+	Name string `json:"name"`
+}
+
+func userFilePath() string {
+	return filepath.Join(profilesDir, "user.json")
+}
+
+func loadUser() UserData {
+	userMu.Lock()
+	defer userMu.Unlock()
+	data, err := os.ReadFile(userFilePath())
+	if err == nil {
+		var u UserData
+		if json.Unmarshal(data, &u) == nil {
+			return u
+		}
+	}
+	return UserData{}
+}
+
+func saveUser(u UserData) {
+	userMu.Lock()
+	defer userMu.Unlock()
+	data, _ := json.MarshalIndent(u, "", "  ")
+	os.MkdirAll(profilesDir, 0755)
+	os.WriteFile(userFilePath(), data, 0644)
+}
+
+func handleUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "POST" {
+		var req struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON", 400)
+			return
+		}
+		req.Name = strings.TrimSpace(req.Name)
+		if req.Name == "" {
+			http.Error(w, "name required", 400)
+			return
+		}
+		saveUser(UserData{Name: req.Name})
+		writeJSON(w, map[string]string{"status": "ok", "name": req.Name})
+		return
+	}
+	u := loadUser()
+	writeJSON(w, u)
+}
+
 // === HELPERS ===
 
 func writeJSON(w http.ResponseWriter, v interface{}) {
@@ -817,10 +947,21 @@ func openBrowser(url string) {
 }
 
 func main() {
+	defer func() {
+		if r := recover(); r != nil {
+			appLog("PANIC: %v", r)
+			os.Exit(1)
+		}
+	}()
+
 	cfg = loadConfig()
+	appLog("STARTUP - Retard Sorter v%s", Version)
+	appLog("Profiles dir: %s", profilesDir)
+	appLog("Log file: %s", logPath)
 
 	sub, err := fs.Sub(staticFiles, "static")
 	if err != nil {
+		appLog("FATAL: static embed failed: %v", err)
 		panic(err)
 	}
 
@@ -831,6 +972,7 @@ func main() {
 	mux.HandleFunc("/api/config", handleConfig)
 	mux.HandleFunc("/api/config/filters", handleUpdateFilters)
 	mux.HandleFunc("/api/config/proxy", handleProxyConfig)
+	mux.HandleFunc("/api/user", handleUser)
 	mux.HandleFunc("/api/runs", handleRuns)
 	mux.HandleFunc("/api/run/progress", handleRunProgress)
 	mux.HandleFunc("/api/runs/", func(w http.ResponseWriter, r *http.Request) {
@@ -858,6 +1000,8 @@ func main() {
 	fmt.Println("  Netscape Cookie Sorter & Domain Filter")
 	fmt.Println("============================================================")
 	fmt.Println()
+	fmt.Printf("  Profiles dir: %s\n", profilesDir)
+	fmt.Println()
 	fmt.Printf("  Place your files in: %s\n", assetsDir)
 	fmt.Println("    - background.mp4  (fullscreen video background)")
 	fmt.Println("    - logo.gif        (sidebar logo, animated)")
@@ -868,11 +1012,14 @@ func main() {
 	fmt.Println()
 	fmt.Println("  Press Ctrl+C to stop the server.")
 	fmt.Println()
+	fmt.Printf("  Log: %s\n\n", logPath)
 
 	go openBrowser("http://" + addr)
 
 	if err := http.ListenAndServe(addr, mux); err != nil {
+		appLog("SERVER STOP - %v", err)
 		fmt.Fprintf(os.Stderr, "Server error: %s\n", err)
 		os.Exit(1)
 	}
+	appLog("SHUTDOWN - Normal exit")
 }

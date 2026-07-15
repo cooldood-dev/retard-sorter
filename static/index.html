@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Retard Sorter</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -24,7 +24,7 @@
         <div id="brandFallbackTop" class="topbar-logo topbar-logo-fallback" style="display:none">RS</div>
         <span class="topbar-title">Retard Sorter</span>
       </a>
-          <span class="topbar-version">v1.5.2</span>
+          <span class="topbar-version">v1.6.0</span>
     </div>
     <div class="topbar-right">
       <span class="credits-pill">
@@ -37,10 +37,23 @@
   <!-- MAIN CONTENT -->
   <main id="content">
 
+    <!-- FIRST STARTUP OVERLAY -->
+    <div id="firstStartup" class="first-startup" style="display:none">
+      <div class="first-startup-panel">
+        <div class="first-startup-logo">RS</div>
+        <h2>Welcome to Retard Sorter</h2>
+        <p class="first-startup-sub">Enter your name to get started</p>
+        <div class="first-startup-input-wrap">
+          <input type="text" id="userNameInput" placeholder="Your name..." maxlength="30">
+          <button class="btn btn-primary btn-lg" id="userNameSubmit" onclick="saveUserName()" style="width:100%">Get started</button>
+        </div>
+      </div>
+    </div>
+
     <!-- DASHBOARD -->
     <section id="page-dashboard" class="page active">
       <div class="page-heading">
-        <h1>Welcome back,</h1>
+        <h1>Welcome back, <span id="dashUserName">—</span></h1>
         <p class="page-subtext" id="dashSubtext">Overview of all sorting activity</p>
       </div>
 
@@ -63,19 +76,19 @@
         </div>
       </div>
 
-      <div class="card-row">
-        <div class="card">
+      <div class="card-row-three">
+        <div class="card card-recent">
           <h3 class="card-title">Recent runs</h3>
           <div id="recentList"><div class="list-skeleton"><div></div><div></div><div></div></div></div>
         </div>
-        <div class="card">
+        <div class="card card-actions">
           <h3 class="card-title">Quick actions</h3>
           <div class="action-list">
             <div class="list-item" onclick="navigate('run')">
               <div class="list-radio"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg></div>
               <div class="list-body">
                 <div class="list-title">New sort run</div>
-                <div class="list-sub">Process cookie files against target domains</div>
+                <div class="list-sub">Process cookie files</div>
               </div>
               <svg class="list-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
             </div>
@@ -83,11 +96,24 @@
               <div class="list-radio"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M6 12h12"/><path d="M8 18h8"/></svg></div>
               <div class="list-body">
                 <div class="list-title">Manage filters</div>
-                <div class="list-sub">Add or remove target domains</div>
+                <div class="list-sub">Add or remove domains</div>
               </div>
               <svg class="list-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
             </div>
-
+          </div>
+        </div>
+        <div class="card card-status">
+          <h3 class="card-title">Working status</h3>
+          <div class="status-content">
+            <div class="status-indicator" id="statusIndicator">
+              <span class="status-dot" id="statusDot"></span>
+              <span class="status-text" id="statusText">Ready</span>
+            </div>
+            <div class="status-details">
+              <div class="status-stat"><span>Filters</span><span id="statusFilters">0</span></div>
+              <div class="status-stat"><span>Total runs</span><span id="statusRunsStat">0</span></div>
+              <div class="status-stat"><span>Total hits</span><span id="statusHitsStat">0</span></div>
+            </div>
           </div>
         </div>
       </div>
@@ -185,6 +211,10 @@
           <span id="progressHits">0 hits</span>
           <span id="progressStatus">Initializing...</span>
         </div>
+        <div class="eta-card" id="etaCard">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span>ETA: </span><span id="etaTimer">—</span>
+        </div>
         <div id="checkProgress" class="progress-check" style="display:none">
           <div class="check-track"><div class="check-fill" id="checkFill"></div></div>
           <div class="check-meta">
@@ -193,6 +223,7 @@
             <span id="checkInvalid" class="invalid">0 invalid</span>
           </div>
         </div>
+
       </div>
 
       <div class="card" id="runResultPanel" style="display:none">
