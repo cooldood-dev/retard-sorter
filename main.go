@@ -127,6 +127,15 @@ func safeSSE(w http.ResponseWriter, flusher http.Flusher, ev ProgressEvent) {
 	}
 }
 
+func safeSSEWithContext(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, ev ProgressEvent) {
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+	safeSSE(w, flusher, ev)
+}
+
 func getExeDir() string {
 	exe, err := os.Executable()
 	if err != nil {
@@ -554,7 +563,7 @@ func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Fl
 		cookies, err := parseNetscapeCookieFile(filePath)
 		if err != nil {
 			errors++
-			safeSSE(w, flusher, ProgressEvent{
+			safeSSEWithContext(ctx, w, flusher, ProgressEvent{
 				Type: "progress", Processed: idx + 1, Total: totalFiles,
 				Hits: totalHits, Percent: float64(idx+1) / float64(totalFiles) * 100,
 			})
@@ -582,6 +591,9 @@ func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Fl
 			flatName := strings.ReplaceAll(relPath, " ", "_")
 			flatName = strings.ReplaceAll(flatName, "/", "_")
 			flatName = strings.ReplaceAll(flatName, "\\", "_")
+			if flatName == "." || flatName == "" {
+				flatName = fmt.Sprintf("file_%d", idx)
+			}
 			outPath := filepath.Join(hitsDir, flatName)
 			var sb strings.Builder
 			sb.WriteString("# Netscape HTTP Cookie File\n")
@@ -608,7 +620,7 @@ func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Fl
 			}
 		}
 
-		safeSSE(w, flusher, ProgressEvent{
+		safeSSEWithContext(ctx, w, flusher, ProgressEvent{
 			Type: "progress", Processed: idx + 1, Total: totalFiles,
 			Hits: totalHits, Percent: float64(idx+1) / float64(totalFiles) * 100,
 		})
@@ -631,14 +643,14 @@ func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Fl
 		}
 		totalChecks := len(tasks)
 
-		safeSSE(w, flusher, ProgressEvent{
+		safeSSEWithContext(ctx, w, flusher, ProgressEvent{
 			Type: "progress", Processed: totalFiles, Total: totalFiles,
 			Hits: totalHits, Percent: 100, Checked: 0, CheckTotal: totalChecks, CheckStatus: "loading proxies",
 		})
 
 		if proxyFile != "" {
 			if err := loadProxies(proxyFile); err != nil {
-				safeSSE(w, flusher, ProgressEvent{
+				safeSSEWithContext(ctx, w, flusher, ProgressEvent{
 					Type: "progress", Processed: totalFiles, Total: totalFiles,
 					Hits: totalHits, Percent: 100, Checked: 0, CheckTotal: totalChecks, CheckStatus: "proxy load failed: " + err.Error(),
 				})
@@ -653,6 +665,7 @@ func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Fl
 		progressWG.Add(1)
 		go func() {
 			defer progressWG.Done()
+			defer func() { recover() }()
 			ticker := time.NewTicker(200 * time.Millisecond)
 			defer ticker.Stop()
 			for {
@@ -665,9 +678,13 @@ func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Fl
 						continue
 					}
 					v := atomic.LoadInt64(&valids)
+					pct := float64(0)
+					if totalChecks > 0 {
+						pct = float64(c) / float64(totalChecks) * 100
+					}
 					safeSSE(w, flusher, ProgressEvent{
 						Type: "progress", Processed: totalFiles, Total: totalFiles,
-						Hits: totalHits, Percent: float64(c) / float64(totalChecks) * 100,
+						Hits: totalHits, Percent: pct,
 						Checked: int(c), CheckTotal: totalChecks,
 						Valid: int(v), Invalid: int(c - v),
 						CheckStatus: fmt.Sprintf("checking %d/%d", c, totalChecks),
@@ -704,7 +721,12 @@ func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Fl
 			wg.Add(1)
 			go func(t checkTask) {
 				defer wg.Done()
-				sem <- struct{}{}
+				defer func() { recover() }()
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
 				defer func() { <-sem }()
 
 				var pu string
@@ -842,7 +864,7 @@ func handleRunProgress(w http.ResponseWriter, r *http.Request) {
 
 	processDir := dir
 	if hasCookieSubdirs(dir) {
-		safeSSE(w, flusher, ProgressEvent{Type: "progress", Processed: 0, Total: 0, Hits: 0, Percent: 0, CheckStatus: "collecting cookie files from subfolders..."})
+		safeSSEWithContext(r.Context(), w, flusher, ProgressEvent{Type: "progress", Processed: 0, Total: 0, Hits: 0, Percent: 0, CheckStatus: "collecting cookie files from subfolders..."})
 		collected, err := collectCookieFiles(dir, tmpDir)
 		if err != nil {
 			writeSSE(w, ProgressEvent{Type: "error", Message: fmt.Sprintf("failed to collect cookie files: %v", err)})
@@ -1007,6 +1029,7 @@ func writeJSON(w http.ResponseWriter, v interface{}) {
 }
 
 func writeSSE(w http.ResponseWriter, ev ProgressEvent) {
+	defer func() { recover() }()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	fmt.Fprintf(w, "data: %s\n\n", mustJSON(ev))
