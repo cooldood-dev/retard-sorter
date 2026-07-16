@@ -106,6 +106,7 @@ var (
 	resDir            string
 	profilesDir       string
 	assetsDir         string
+	changelogPath     string
 	proxies           []string
 	proxiesMu         sync.Mutex
 	logPath           string
@@ -140,6 +141,7 @@ func initPaths() {
 	cfgPath = filepath.Join(base, "retard_config.json")
 	resDir = filepath.Join(base, "results")
 	assetsDir = filepath.Join(base, "assets")
+	changelogPath = filepath.Join(base, "CHANGELOG.md")
 	logPath = filepath.Join(base, "retard-sorter.log")
 
 	home, _ := os.UserHomeDir()
@@ -394,6 +396,15 @@ func checkDomainCookies(domain string, cookies []Cookie, proxyURL string) bool {
 }
 
 // === HTTP HANDLERS ===
+
+func handleChangelog(w http.ResponseWriter, r *http.Request) {
+	data, err := os.ReadFile(changelogPath)
+	if err != nil {
+		http.Error(w, "changelog not found", 404)
+		return
+	}
+	writeJSON(w, map[string]string{"content": string(data)})
+}
 
 func handleConfig(w http.ResponseWriter, r *http.Request) {
 	cfgMu.RLock()
@@ -1047,6 +1058,7 @@ func main() {
 	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(sub))))
 	mux.Handle("/assets/", http.StripPrefix("/assets/",
 		http.FileServer(http.Dir(assetsDir))))
+	mux.HandleFunc("/api/changelog", handleChangelog)
 	mux.HandleFunc("/api/config", handleConfig)
 	mux.HandleFunc("/api/config/filters", handleUpdateFilters)
 	mux.HandleFunc("/api/config/proxy", handleProxyConfig)

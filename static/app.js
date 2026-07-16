@@ -37,6 +37,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderProxySettings();
   refreshDashboard();
   refreshHistory();
+  loadChangelog();
   initDock();
 });
 
@@ -62,6 +63,16 @@ document.addEventListener('keydown', function(e) {
 
 /* ── Asset fallbacks ── */
 
+/* ── Changelog ── */
+async function loadChangelog() {
+  try {
+    var res = await api('GET', '/api/changelog');
+    document.getElementById('changelogBody').textContent = res.content || 'No changelog available.';
+  } catch {
+    document.getElementById('changelogBody').innerHTML = '<p class="text-muted">Could not load changelog.</p>';
+  }
+}
+
 /* ── NAVIGATION ── */
 function navigate(page) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -69,7 +80,7 @@ function navigate(page) {
   document.getElementById('page-' + page).classList.add('active');
   var dockItem = document.querySelector('.dock-item[data-page="' + page + '"]');
   if (dockItem) dockItem.classList.add('active');
-  if (page === 'dashboard') refreshDashboard();
+  if (page === 'dashboard') { refreshDashboard(); loadChangelog(); }
   if (page === 'run') renderProxySettings();
   if (page === 'history') refreshHistory();
 }
@@ -181,6 +192,7 @@ async function refreshDashboard() {
       ? 'Total: ' + files.toLocaleString() + ' files, ' + hits.toLocaleString() + ' hits across ' + runs.length + ' run' + (runs.length !== 1 ? 's' : '')
       : 'No runs yet. Start your first sort.';
     renderRecent(runs);
+    loadChangelog();
   } catch {
     document.getElementById('recentList').innerHTML = '<p class="text-muted" style="padding:12px 0">Could not load data.</p>';
   }
