@@ -739,6 +739,49 @@ func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Fl
 	}, true
 }
 
+func hasCookieSubdirs(root string) bool {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			cookieDir := filepath.Join(root, e.Name(), "cookie")
+			if info, err := os.Stat(cookieDir); err == nil && info.IsDir() {
+				if items, _ := os.ReadDir(cookieDir); len(items) > 0 {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func collectCookieFiles(srcDir, tmpDir string) (int, error) {
+	os.MkdirAll(tmpDir, 0755)
+	count := 0
+	filepath.WalkDir(srcDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		parent := filepath.Dir(path)
+		if strings.EqualFold(filepath.Base(parent), "cookie") {
+			ext := strings.ToLower(filepath.Ext(path))
+			if ext == ".txt" || ext == "" {
+				data, err := os.ReadFile(path)
+				if err == nil {
+					name := fmt.Sprintf("%d_%s", count, d.Name())
+					dst := filepath.Join(tmpDir, name)
+					os.WriteFile(dst, data, 0644)
+					count++
+				}
+			}
+		}
+		return nil
+	})
+	return count, nil
+}
+
 func handleRunProgress(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -782,12 +825,32 @@ func handleRunProgress(w http.ResponseWriter, r *http.Request) {
 	timestamp := now.Format("20060102_150405")
 
 	profilesRunDir := filepath.Join(profilesDir, "run_"+timestamp)
+	tmpDir := filepath.Join(profilesRunDir, "tmp")
 	hitsDir := filepath.Join(profilesRunDir, "hits")
 	os.MkdirAll(hitsDir, 0755)
 
-	summary, ok := processFileLoop(r.Context(), w, flusher, filters, dir, hitsDir, timestamp, proxyMode, proxyFile)
+	processDir := dir
+	if hasCookieSubdirs(dir) {
+		safeSSE(w, flusher, ProgressEvent{Type: "progress", Processed: 0, Total: 0, Hits: 0, Percent: 0, CheckStatus: "collecting cookie files from subfolders..."})
+		collected, err := collectCookieFiles(dir, tmpDir)
+		if err != nil {
+			writeSSE(w, ProgressEvent{Type: "error", Message: fmt.Sprintf("failed to collect cookie files: %v", err)})
+			return
+		}
+		if collected == 0 {
+			writeSSE(w, ProgressEvent{Type: "error", Message: "no cookie .txt files found in cookie/ subfolders"})
+			os.RemoveAll(tmpDir)
+			return
+		}
+		appLog("COLLECTED %d cookie files from subfolders into temp dir", collected)
+		processDir = tmpDir
+	}
+
+	summary, ok := processFileLoop(r.Context(), w, flusher, filters, processDir, hitsDir, timestamp, proxyMode, proxyFile)
+	os.RemoveAll(tmpDir)
+
 	if !ok {
-		writeSSE(w, ProgressEvent{Type: "error", Message: "no files in directory"})
+		writeSSE(w, ProgressEvent{Type: "error", Message: "no files to process"})
 		return
 	}
 
