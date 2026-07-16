@@ -1,5 +1,7 @@
 retard_config.json
 results/
 assets/
+build/
 *.exe
 retard-sorter-v*
+retard-sorter.log
