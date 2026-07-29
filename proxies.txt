@@ -1,0 +1,5 @@
+# Retard Sorter - proxy list (one per line)
+# Format: ip:port or ip:port:user:pass
+# Example:
+# 127.0.0.1:8080
+# 1.2.3.4:1080:user:pass

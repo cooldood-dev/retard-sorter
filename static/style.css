@@ -797,6 +797,8 @@ input[type="text"]:focus, textarea:focus { box-shadow: 0 0 0 2px var(--accent), 
 }
 .eta-card svg { color: var(--accent); flex-shrink: 0; }
 .eta-card span:last-child { color: var(--accent); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.eta-sep { color: var(--text3); margin: 0 4px; opacity: 0.5; }
+.eta-card #etaElapsed, .eta-card #etaSpeed { color: var(--text2); font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
 /* ── Progress ── */
 .progress-track {

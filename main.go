@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -20,6 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 )
+
+const MaxCookieFileSize = 256 * 1024 * 1024
 
 const Version = "1.6.0"
 
@@ -45,31 +49,31 @@ type Cookie struct {
 }
 
 type Summary struct {
-	RunID            string         `json:"run_id"`
-	Timestamp        string         `json:"timestamp"`
-	FilesScanned     int            `json:"files_scanned"`
-	TotalCookies     int            `json:"total_cookies"`
-	TotalHits        int            `json:"total_hits"`
-	CheckedCookies   int            `json:"checked_cookies"`
-	ValidCookies     int            `json:"valid_cookies"`
-	InvalidCookies   int            `json:"invalid_cookies"`
-	Errors           int            `json:"errors"`
-	ElapsedSeconds   float64        `json:"elapsed_seconds"`
-	FiltersUsed      []string       `json:"filters_used"`
-	SourceDirectory  string         `json:"source_directory"`
-	DomainBreakdown  map[string]int `json:"domain_breakdown"`
-	OutputDir        string         `json:"output_dir"`
-	ProfilesDir      string         `json:"profiles_dir"`
+	RunID           string         `json:"run_id"`
+	Timestamp       string         `json:"timestamp"`
+	FilesScanned    int            `json:"files_scanned"`
+	TotalCookies    int            `json:"total_cookies"`
+	TotalHits       int            `json:"total_hits"`
+	CheckedCookies  int            `json:"checked_cookies"`
+	ValidCookies    int            `json:"valid_cookies"`
+	InvalidCookies  int            `json:"invalid_cookies"`
+	Errors          int            `json:"errors"`
+	ElapsedSeconds  float64        `json:"elapsed_seconds"`
+	FiltersUsed     []string       `json:"filters_used"`
+	SourceDirectory string         `json:"source_directory"`
+	DomainBreakdown map[string]int `json:"domain_breakdown"`
+	OutputDir       string         `json:"output_dir"`
+	ProfilesDir     string         `json:"profiles_dir"`
 }
 
 type RunEntry struct {
-	RunID          string         `json:"run_id"`
-	Timestamp      string         `json:"timestamp"`
-	FilesScanned   int            `json:"files_scanned"`
-	TotalCookies   int            `json:"total_cookies"`
-	TotalHits      int            `json:"total_hits"`
-	Errors         int            `json:"errors"`
-	ElapsedSeconds float64        `json:"elapsed_seconds"`
+	RunID          string  `json:"run_id"`
+	Timestamp      string  `json:"timestamp"`
+	FilesScanned   int     `json:"files_scanned"`
+	TotalCookies   int     `json:"total_cookies"`
+	TotalHits      int     `json:"total_hits"`
+	Errors         int     `json:"errors"`
+	ElapsedSeconds float64 `json:"elapsed_seconds"`
 }
 
 type ProgressEvent struct {
@@ -100,17 +104,18 @@ type checkTask struct {
 }
 
 var (
-	cfg               *Config
-	cfgMu             sync.RWMutex
-	cfgPath           string
-	resDir            string
-	profilesDir       string
-	assetsDir         string
-	changelogPath     string
-	proxies           []string
-	proxiesMu         sync.Mutex
-	logPath           string
-	logMu             sync.Mutex
+	cfg           *Config
+	cfgMu         sync.RWMutex
+	cfgPath       string
+	resDir        string
+	profilesDir   string
+	assetsDir     string
+	changelogPath string
+	proxies       []string
+	proxiesMu     sync.Mutex
+	proxiesPath   string
+	logPath       string
+	logMu         sync.Mutex
 
 	sharedTransport = &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
@@ -152,13 +157,33 @@ func initPaths() {
 	assetsDir = filepath.Join(base, "assets")
 	changelogPath = filepath.Join(base, "CHANGELOG.md")
 	logPath = filepath.Join(base, "retard-sorter.log")
+	proxiesPath = filepath.Join(base, "proxies.txt")
 
 	home, _ := os.UserHomeDir()
+	if home == "" {
+		home = base
+	}
 	profilesDir = filepath.Join(home, "Documents", "profiles")
 
 	os.MkdirAll(resDir, 0755)
 	os.MkdirAll(assetsDir, 0755)
 	os.MkdirAll(profilesDir, 0755)
+
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		f, ferr := os.Create(logPath)
+		if ferr == nil {
+			f.Close()
+		}
+	}
+
+	if _, err := os.Stat(proxiesPath); os.IsNotExist(err) {
+		defaultProxies := "# Retard Sorter - proxy list (one per line)\n" +
+			"# Format: ip:port or ip:port:user:pass\n" +
+			"# Example:\n" +
+			"# 127.0.0.1:8080\n" +
+			"# 1.2.3.4:1080:user:pass\n"
+		os.WriteFile(proxiesPath, []byte(defaultProxies), 0644)
+	}
 }
 
 func appLog(format string, args ...interface{}) {
@@ -280,13 +305,28 @@ var DefaultFilters = []string{
 }
 
 func parseNetscapeCookieFile(path string) ([]Cookie, error) {
-	data, err := os.ReadFile(path)
+	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
-	var cookies []Cookie
-	for _, rawLine := range strings.Split(string(data), "\n") {
-		line := strings.TrimSpace(rawLine)
+	if info.Size() > MaxCookieFileSize {
+		return nil, fmt.Errorf("file too large: %d bytes (max %d)", info.Size(), MaxCookieFileSize)
+	}
+	if info.Size() == 0 {
+		return nil, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	cookies := make([]Cookie, 0, 64)
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 256*1024), 10*1024*1024)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
 			continue
 		}
@@ -302,24 +342,55 @@ func parseNetscapeCookieFile(path string) ([]Cookie, error) {
 				Name:      parts[5],
 				Value:     strings.Join(parts[6:], "\t"),
 			})
-		} else if len(cookies) > 0 {
-			cookies[len(cookies)-1].Value += "\n" + line
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		return cookies, fmt.Errorf("scan error: %w", err)
 	}
 	return cookies, nil
 }
 
-func cookieMatchesAnyDomain(c Cookie, targets []string) string {
+// filterIndex provides O(1) exact-match lookups and fast suffix fallback.
+type filterIndex struct {
+	exact   map[string]string // lowercase -> original
+	suffixes []string         // pre-computed lowercase for suffix matching
+}
+
+func buildFilterIndex(filters []string) *filterIndex {
+	fi := &filterIndex{
+		exact:    make(map[string]string, len(filters)),
+		suffixes: make([]string, 0, len(filters)),
+	}
+	for _, f := range filters {
+		low := strings.ToLower(f)
+		fi.exact[low] = f
+		fi.suffixes = append(fi.suffixes, low)
+	}
+	return fi
+}
+
+func (fi *filterIndex) match(c Cookie) string {
 	cd := strings.ToLower(c.Domain)
-	raw := strings.ToLower(c.RawDomain)
-	for _, td := range targets {
-		tdl := strings.ToLower(td)
-		if cd == tdl || strings.HasSuffix(cd, "."+tdl) {
-			return td
+	// O(1) exact match
+	if orig, ok := fi.exact[cd]; ok {
+		return orig
+	}
+	// Suffix match
+	for _, tdl := range fi.suffixes {
+		if strings.HasSuffix(cd, "."+tdl) {
+			return fi.exact[tdl]
 		}
-		r := strings.TrimLeft(raw, ".")
-		if r == tdl || strings.HasSuffix(raw, "."+tdl) {
-			return td
+	}
+	// Also check raw domain
+	raw := strings.ToLower(strings.TrimLeft(c.RawDomain, "."))
+	if raw != cd {
+		if orig, ok := fi.exact[raw]; ok {
+			return orig
+		}
+		for _, tdl := range fi.suffixes {
+			if strings.HasSuffix(raw, "."+tdl) {
+				return fi.exact[tdl]
+			}
 		}
 	}
 	return ""
@@ -363,9 +434,12 @@ func buildProxyURL(raw, mode string) string {
 	}
 }
 
-func checkDomainCookies(domain string, cookies []Cookie, proxyURL string) bool {
+func checkDomainCookies(ctx context.Context, domain string, cookies []Cookie, proxyURL string) bool {
+	if domain == "" {
+		return false
+	}
 	u := "https://" + domain + "/"
-	req, err := http.NewRequest("GET", u, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		return false
 	}
@@ -373,6 +447,9 @@ func checkDomainCookies(domain string, cookies []Cookie, proxyURL string) bool {
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 	for _, c := range cookies {
+		if c.Name == "" {
+			continue
+		}
 		req.AddCookie(&http.Cookie{
 			Name:   c.Name,
 			Value:  c.Value,
@@ -380,27 +457,44 @@ func checkDomainCookies(domain string, cookies []Cookie, proxyURL string) bool {
 			Path:   c.Path,
 		})
 	}
-	var client *http.Client
+
+	tr := sharedTransport
 	if proxyURL != "" {
 		p, e := url.Parse(proxyURL)
 		if e != nil {
 			return false
 		}
-		tr := &http.Transport{
-			Proxy:           http.ProxyURL(p),
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		perReqTr := &http.Transport{
+			Proxy:                 http.ProxyURL(p),
+			TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
+			MaxIdleConns:          10,
+			MaxIdleConnsPerHost:   2,
+			IdleConnTimeout:       30 * time.Second,
+			ResponseHeaderTimeout: 10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
 		}
-		defer tr.CloseIdleConnections()
-		client = &http.Client{Transport: tr, Timeout: 15 * time.Second}
-	} else {
-		client = &http.Client{Transport: sharedTransport, Timeout: 15 * time.Second}
+		defer perReqTr.CloseIdleConnections()
+		tr = perReqTr
+	}
+
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   15 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return errors.New("too many redirects")
+			}
+			return nil
+		},
 	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
+	defer func() {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
 	return resp.StatusCode == 200
 }
 
@@ -522,6 +616,8 @@ func handleRunDetail(w http.ResponseWriter, r *http.Request, runID string) {
 
 func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, filters []string, dir, hitsDir, timestamp, proxyMode, proxyFile string) (Summary, bool) {
 	now := time.Now()
+	fi := buildFilterIndex(filters)
+	useProxy := proxyMode == "http" || proxyMode == "socks4" || proxyMode == "socks5"
 
 	var files []string
 	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
@@ -538,103 +634,180 @@ func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Fl
 		return Summary{}, false
 	}
 
-	runDir := filepath.Join(profilesDir, "run_"+timestamp)
-	totalCookies := 0
-	totalHits := 0
+	var totalCookies int64
+	var totalHits int64
+	var errorCount int64
+	var domainHitsMu sync.Mutex
 	domainHits := make(map[string]int)
-	errors := 0
 	startTime := time.Now()
 
 	type fileHitsInfo struct {
 		relPath string
-		cookies []Cookie
 		domains map[string][]Cookie
 	}
+	var allFileHitsMu sync.Mutex
 	var allFileHits []fileHitsInfo
 
-	for idx, filePath := range files {
-		select {
-		case <-ctx.Done():
-			return Summary{}, false
-		default:
+	// Track parent dirs for deferred cleanup
+	var dirsToCleanMu sync.Mutex
+	dirsToClean := make(map[string]struct{})
+
+	writeHitsFile := func(relPath string, fileHits []Cookie, idx int) bool {
+		if len(fileHits) == 0 {
+			return true
 		}
+		flatName := strings.ReplaceAll(relPath, " ", "_")
+		flatName = strings.ReplaceAll(flatName, "/", "_")
+		flatName = strings.ReplaceAll(flatName, "\\", "_")
+		if flatName == "." || flatName == "" {
+			flatName = fmt.Sprintf("file_%d", idx)
+		}
+		outPath := filepath.Join(hitsDir, flatName)
+		var sb strings.Builder
+		sb.Grow(len(fileHits) * 128)
+		sb.WriteString("# Netscape HTTP Cookie File\n")
+		sb.WriteString(fmt.Sprintf("# Source: %s\n", relPath))
+		sb.WriteString(fmt.Sprintf("# Matched domains: %d cookies\n", len(fileHits)))
+		sb.WriteString(fmt.Sprintf("# Exported at: %s\n\n", now.Format(time.RFC3339)))
+		for _, c := range fileHits {
+			sb.WriteString(fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				c.RawDomain, c.Flag, c.Path, c.Secure, c.Expiry, c.Name, c.Value))
+		}
+		if err := os.WriteFile(outPath, []byte(sb.String()), 0644); err != nil {
+			appLog("WARN - failed to write hits file %s: %v", outPath, err)
+			return false
+		}
+		return true
+	}
+
+	processOne := func(idx int, filePath string) (fileErr error) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				appLog("PANIC processing file %s: %v", filePath, rec)
+				fileErr = fmt.Errorf("panic: %v", rec)
+			}
+		}()
 
 		relPath, _ := filepath.Rel(dir, filePath)
 		cookies, err := parseNetscapeCookieFile(filePath)
 		if err != nil {
-			errors++
-			safeSSEWithContext(ctx, w, flusher, ProgressEvent{
-				Type: "progress", Processed: idx + 1, Total: totalFiles,
-				Hits: totalHits, Percent: float64(idx+1) / float64(totalFiles) * 100,
-			})
-			continue
+			return err
 		}
+		if len(cookies) == 0 {
+			os.Remove(filePath)
+			return nil
+		}
+		atomic.AddInt64(&totalCookies, int64(len(cookies)))
 
-		totalCookies += len(cookies)
 		var fileHits []Cookie
-		domains := make(map[string][]Cookie)
+		var domains map[string][]Cookie
+		if useProxy {
+			domains = make(map[string][]Cookie)
+		}
 		for _, c := range cookies {
-			matchedDomain := cookieMatchesAnyDomain(c, filters)
+			matchedDomain := fi.match(c)
 			if matchedDomain != "" {
 				fileHits = append(fileHits, c)
-				domains[matchedDomain] = append(domains[matchedDomain], c)
+				if useProxy {
+					domains[matchedDomain] = append(domains[matchedDomain], c)
+				}
+				domainHitsMu.Lock()
 				domainHits[matchedDomain]++
-				totalHits++
+				domainHitsMu.Unlock()
+				atomic.AddInt64(&totalHits, 1)
 			}
 		}
 
 		if len(fileHits) > 0 {
-			allFileHits = append(allFileHits, fileHitsInfo{relPath, fileHits, domains})
-		}
-
-		if len(fileHits) > 0 {
-			flatName := strings.ReplaceAll(relPath, " ", "_")
-			flatName = strings.ReplaceAll(flatName, "/", "_")
-			flatName = strings.ReplaceAll(flatName, "\\", "_")
-			if flatName == "." || flatName == "" {
-				flatName = fmt.Sprintf("file_%d", idx)
+			writeHitsFile(relPath, fileHits, idx)
+			if useProxy {
+				allFileHitsMu.Lock()
+				allFileHits = append(allFileHits, fileHitsInfo{relPath, domains})
+				allFileHitsMu.Unlock()
 			}
-			outPath := filepath.Join(hitsDir, flatName)
-			var sb strings.Builder
-			sb.WriteString("# Netscape HTTP Cookie File\n")
-			sb.WriteString(fmt.Sprintf("# Source: %s\n", filePath))
-			sb.WriteString(fmt.Sprintf("# Matched domains: %d cookies\n", len(fileHits)))
-			sb.WriteString(fmt.Sprintf("# Exported at: %s\n\n", now.Format(time.RFC3339)))
-			for _, c := range fileHits {
-				sb.WriteString(fmt.Sprintf("%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-					c.RawDomain, c.Flag, c.Path, c.Secure, c.Expiry, c.Name, c.Value))
-			}
-			os.WriteFile(outPath, []byte(sb.String()), 0644)
 		}
 
 		os.Remove(filePath)
 
+		// Track parent dir for deferred cleanup
 		parent := filepath.Dir(filePath)
-		for parent != dir {
-			entries, _ := os.ReadDir(parent)
-			if len(entries) == 0 {
-				os.Remove(parent)
-				parent = filepath.Dir(parent)
-			} else {
-				break
-			}
+		if parent != dir && parent != "." && parent != "/" {
+			dirsToCleanMu.Lock()
+			dirsToClean[parent] = struct{}{}
+			dirsToCleanMu.Unlock()
 		}
+		return nil
+	}
 
-		safeSSEWithContext(ctx, w, flusher, ProgressEvent{
-			Type: "progress", Processed: idx + 1, Total: totalFiles,
-			Hits: totalHits, Percent: float64(idx+1) / float64(totalFiles) * 100,
-		})
+	// Parallel file processing
+	const numWorkers = 16
+	fileCh := make(chan int, numWorkers*4)
+	var wg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { recover() }()
+			for idx := range fileCh {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				if err := processOne(idx, files[idx]); err != nil {
+					atomic.AddInt64(&errorCount, 1)
+					appLog("ERROR processing %s: %v", files[idx], err)
+				}
+			}
+		}()
+	}
 
+	// Feed files and send throttled progress
+	for idx := range files {
+		select {
+		case <-ctx.Done():
+			break
+		case fileCh <- idx:
+		}
+		if (idx+1)%10 == 0 || idx+1 == totalFiles {
+			hits := int(atomic.LoadInt64(&totalHits))
+			safeSSEWithContext(ctx, w, flusher, ProgressEvent{
+				Type: "progress", Processed: idx + 1, Total: totalFiles,
+				Hits: hits, Percent: float64(idx+1) / float64(totalFiles) * 100,
+			})
+		}
 		if (idx+1)%1000 == 0 || idx+1 == totalFiles {
-			appLog("RUN PROGRESS - %d/%d files, %d hits, %d errors", idx+1, totalFiles, totalHits, errors)
+			hits := int(atomic.LoadInt64(&totalHits))
+			errs := int(atomic.LoadInt64(&errorCount))
+			appLog("RUN PROGRESS - %d/%d files, %d hits, %d errors", idx+1, totalFiles, hits, errs)
 		}
 	}
+	close(fileCh)
+	wg.Wait()
+
+	// Deferred directory cleanup
+	for d := range dirsToClean {
+		for d != dir && d != "." && d != "/" {
+			entries, err := os.ReadDir(d)
+			if err != nil || len(entries) > 0 {
+				break
+			}
+			if err := os.Remove(d); err != nil {
+				break
+			}
+			d = filepath.Dir(d)
+		}
+	}
+
+	finalHits := int(atomic.LoadInt64(&totalHits))
+	finalCookies := int(atomic.LoadInt64(&totalCookies))
+	finalErrors := int(atomic.LoadInt64(&errorCount))
 
 	checked := 0
 	valid := 0
 	invalid := 0
 
-	if (proxyMode == "http" || proxyMode == "socks4" || proxyMode == "socks5") && len(allFileHits) > 0 {
+	if useProxy && len(allFileHits) > 0 {
 		var tasks []checkTask
 		for _, fh := range allFileHits {
 			for domain, cookies := range fh.domains {
@@ -642,114 +815,9 @@ func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Fl
 			}
 		}
 		totalChecks := len(tasks)
-
-		safeSSEWithContext(ctx, w, flusher, ProgressEvent{
-			Type: "progress", Processed: totalFiles, Total: totalFiles,
-			Hits: totalHits, Percent: 100, Checked: 0, CheckTotal: totalChecks, CheckStatus: "loading proxies",
-		})
-
-		if proxyFile != "" {
-			if err := loadProxies(proxyFile); err != nil {
-				safeSSEWithContext(ctx, w, flusher, ProgressEvent{
-					Type: "progress", Processed: totalFiles, Total: totalFiles,
-					Hits: totalHits, Percent: 100, Checked: 0, CheckTotal: totalChecks, CheckStatus: "proxy load failed: " + err.Error(),
-				})
-			}
+		if totalChecks > 0 {
+			runProxyChecks(ctx, w, flusher, tasks, totalFiles, finalHits, &checked, &valid, &invalid, proxyMode, proxyFile)
 		}
-
-		var completed int64
-		var valids int64
-		progressDone := make(chan struct{})
-
-		var progressWG sync.WaitGroup
-		progressWG.Add(1)
-		go func() {
-			defer progressWG.Done()
-			defer func() { recover() }()
-			ticker := time.NewTicker(200 * time.Millisecond)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-progressDone:
-					return
-				case <-ticker.C:
-					c := atomic.LoadInt64(&completed)
-					if c == 0 {
-						continue
-					}
-					v := atomic.LoadInt64(&valids)
-					pct := float64(0)
-					if totalChecks > 0 {
-						pct = float64(c) / float64(totalChecks) * 100
-					}
-					safeSSE(w, flusher, ProgressEvent{
-						Type: "progress", Processed: totalFiles, Total: totalFiles,
-						Hits: totalHits, Percent: pct,
-						Checked: int(c), CheckTotal: totalChecks,
-						Valid: int(v), Invalid: int(c - v),
-						CheckStatus: fmt.Sprintf("checking %d/%d", c, totalChecks),
-					})
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-
-		var wg sync.WaitGroup
-		sem := make(chan struct{}, 20)
-
-		for _, task := range tasks {
-			select {
-			case <-ctx.Done():
-				wg.Wait()
-				close(progressDone)
-				progressWG.Wait()
-				c := atomic.LoadInt64(&completed)
-				v := atomic.LoadInt64(&valids)
-				return Summary{
-					RunID: timestamp, Timestamp: now.Format(time.RFC3339),
-					FilesScanned: totalFiles, TotalCookies: totalCookies,
-					TotalHits: totalHits, CheckedCookies: int(c), ValidCookies: int(v),
-					InvalidCookies: int(c - v), Errors: errors,
-					ElapsedSeconds: time.Since(startTime).Seconds(),
-					FiltersUsed: filters, SourceDirectory: dir,
-					DomainBreakdown: domainHits, OutputDir: runDir, ProfilesDir: profilesDir,
-				}, true
-			default:
-			}
-
-			wg.Add(1)
-			go func(t checkTask) {
-				defer wg.Done()
-				defer func() { recover() }()
-				select {
-				case sem <- struct{}{}:
-				case <-ctx.Done():
-					return
-				}
-				defer func() { <-sem }()
-
-				var pu string
-				proxiesMu.Lock()
-				if len(proxies) > 0 {
-					pu = buildProxyURL(proxies[rand.Intn(len(proxies))], proxyMode)
-				}
-				proxiesMu.Unlock()
-
-				if checkDomainCookies(t.domain, t.cookies, pu) {
-					atomic.AddInt64(&valids, 1)
-				}
-				atomic.AddInt64(&completed, 1)
-			}(task)
-		}
-
-		wg.Wait()
-		close(progressDone)
-		progressWG.Wait()
-
-		c := atomic.LoadInt64(&completed)
-		v := atomic.LoadInt64(&valids)
-		checked, valid, invalid = int(c), int(v), int(c-v)
 	}
 
 	elapsed := time.Since(startTime).Seconds()
@@ -757,19 +825,142 @@ func processFileLoop(ctx context.Context, w http.ResponseWriter, flusher http.Fl
 		RunID:           timestamp,
 		Timestamp:       now.Format(time.RFC3339),
 		FilesScanned:    totalFiles,
-		TotalCookies:    totalCookies,
-		TotalHits:       totalHits,
+		TotalCookies:    finalCookies,
+		TotalHits:       finalHits,
 		CheckedCookies:  checked,
 		ValidCookies:    valid,
 		InvalidCookies:  invalid,
-		Errors:          errors,
+		Errors:          finalErrors,
 		ElapsedSeconds:  elapsed,
 		FiltersUsed:     filters,
 		SourceDirectory: dir,
 		DomainBreakdown: domainHits,
-		OutputDir:       runDir,
+		OutputDir:       filepath.Join(resDir, "run_"+timestamp),
 		ProfilesDir:     profilesDir,
 	}, true
+}
+
+func runProxyChecks(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, tasks []checkTask, totalFiles, totalHits int, checkedOut, validOut, invalidOut *int, proxyMode, proxyFile string) {
+	totalChecks := len(tasks)
+
+	safeSSEWithContext(ctx, w, flusher, ProgressEvent{
+		Type: "progress", Processed: totalFiles, Total: totalFiles,
+		Hits: totalHits, Percent: 100, Checked: 0, CheckTotal: totalChecks, CheckStatus: "loading proxies",
+	})
+
+	if proxyFile != "" {
+		if err := loadProxies(proxyFile); err != nil {
+			safeSSEWithContext(ctx, w, flusher, ProgressEvent{
+				Type: "progress", Processed: totalFiles, Total: totalFiles,
+				Hits: totalHits, Percent: 100, Checked: 0, CheckTotal: totalChecks, CheckStatus: "proxy load failed: " + err.Error(),
+			})
+		}
+	}
+
+	var completed int64
+	var valids int64
+	progressDone := make(chan struct{})
+	var progressCloseOnce sync.Once
+
+	var progressWG sync.WaitGroup
+	progressWG.Add(1)
+	go func() {
+		defer progressWG.Done()
+		defer func() { recover() }()
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-progressDone:
+				return
+			case <-ticker.C:
+				if ctx.Err() != nil {
+					return
+				}
+				c := atomic.LoadInt64(&completed)
+				if c == 0 {
+					continue
+				}
+				v := atomic.LoadInt64(&valids)
+				pct := float64(0)
+				if totalChecks > 0 {
+					pct = float64(c) / float64(totalChecks) * 100
+				}
+				safeSSEWithContext(ctx, w, flusher, ProgressEvent{
+					Type: "progress", Processed: totalFiles, Total: totalFiles,
+					Hits: totalHits, Percent: pct,
+					Checked: int(c), CheckTotal: totalChecks,
+					Valid: int(v), Invalid: int(c - v),
+					CheckStatus: fmt.Sprintf("checking %d/%d", c, totalChecks),
+				})
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	const numWorkers = 20
+	taskCh := make(chan checkTask, numWorkers*2)
+	var wg sync.WaitGroup
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { recover() }()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case task, ok := <-taskCh:
+					if !ok {
+						return
+					}
+					var pu string
+					proxiesMu.Lock()
+					if len(proxies) > 0 {
+						pu = buildProxyURL(proxies[rand.Intn(len(proxies))], proxyMode)
+					}
+					proxiesMu.Unlock()
+
+					if checkDomainCookies(ctx, task.domain, task.cookies, pu) {
+						atomic.AddInt64(&valids, 1)
+					}
+					atomic.AddInt64(&completed, 1)
+				}
+			}
+		}()
+	}
+
+feedLoop:
+	for _, task := range tasks {
+		select {
+		case <-ctx.Done():
+			break feedLoop
+		case taskCh <- task:
+		}
+	}
+	close(taskCh)
+
+	doneCh := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(doneCh)
+	}()
+
+	select {
+	case <-doneCh:
+	case <-ctx.Done():
+	}
+
+	progressCloseOnce.Do(func() { close(progressDone) })
+	progressWG.Wait()
+
+	c := atomic.LoadInt64(&completed)
+	v := atomic.LoadInt64(&valids)
+	*checkedOut = int(c)
+	*validOut = int(v)
+	*invalidOut = int(c - v)
 }
 
 func hasCookieSubdirs(root string) bool {
@@ -801,8 +992,16 @@ func collectCookieFiles(srcDir, tmpDir string) (int, error) {
 		if strings.EqualFold(filepath.Base(parent), "cookie") {
 			ext := strings.ToLower(filepath.Ext(path))
 			if ext == ".txt" || ext == "" {
-				data, err := os.ReadFile(path)
-				if err == nil {
+				info, ierr := os.Stat(path)
+				if ierr != nil {
+					return nil
+				}
+				if info.Size() > MaxCookieFileSize {
+					appLog("SKIP - file too large (%d bytes): %s", info.Size(), path)
+					return nil
+				}
+				data, rerr := os.ReadFile(path)
+				if rerr == nil {
 					name := fmt.Sprintf("%d_%s", count, d.Name())
 					dst := filepath.Join(tmpDir, name)
 					os.WriteFile(dst, data, 0644)
@@ -859,8 +1058,12 @@ func handleRunProgress(w http.ResponseWriter, r *http.Request) {
 
 	profilesRunDir := filepath.Join(profilesDir, "run_"+timestamp)
 	tmpDir := filepath.Join(profilesRunDir, "tmp")
-	hitsDir := filepath.Join(profilesRunDir, "hits")
-	os.MkdirAll(hitsDir, 0755)
+	resRunDir := filepath.Join(resDir, "run_"+timestamp)
+	resHitsDir := filepath.Join(resRunDir, "hits")
+	os.MkdirAll(resRunDir, 0755)
+	os.MkdirAll(resHitsDir, 0755)
+	os.MkdirAll(tmpDir, 0755)
+	hitsDir := resHitsDir
 
 	processDir := dir
 	if hasCookieSubdirs(dir) {
@@ -883,31 +1086,17 @@ func handleRunProgress(w http.ResponseWriter, r *http.Request) {
 	os.RemoveAll(tmpDir)
 
 	if !ok {
+		if r.Context().Err() != nil {
+			appLog("RUN CANCELLED - client disconnected")
+			return
+		}
 		writeSSE(w, ProgressEvent{Type: "error", Message: "no files to process"})
 		return
 	}
 
 	sumData, _ := json.MarshalIndent(summary, "", "  ")
-	os.WriteFile(filepath.Join(profilesRunDir, "summary.json"), sumData, 0644)
-
-	resRunDir := filepath.Join(resDir, "run_"+timestamp)
-	os.MkdirAll(resRunDir, 0755)
 	os.WriteFile(filepath.Join(resRunDir, "summary.json"), sumData, 0644)
-
-	resHitsDir := filepath.Join(resRunDir, "hits")
-	os.MkdirAll(resHitsDir, 0755)
-	if hitsEntries, err := os.ReadDir(hitsDir); err == nil {
-		for _, e := range hitsEntries {
-			if !e.IsDir() {
-				src := filepath.Join(hitsDir, e.Name())
-				dst := filepath.Join(resHitsDir, e.Name())
-				data, _ := os.ReadFile(src)
-				if data != nil {
-					os.WriteFile(dst, data, 0644)
-				}
-			}
-		}
-	}
+	os.WriteFile(filepath.Join(profilesRunDir, "summary.json"), sumData, 0644)
 
 	appLog("RUN COMPLETE - files: %d, cookies: %d, hits: %d, errors: %d, time: %.1fs",
 		summary.FilesScanned, summary.TotalCookies, summary.TotalHits, summary.Errors, summary.ElapsedSeconds)
@@ -916,6 +1105,11 @@ func handleRunProgress(w http.ResponseWriter, r *http.Request) {
 	cfg.LastRun = summary.RunID
 	saveConfig(cfg)
 	cfgMu.Unlock()
+
+	if r.Context().Err() != nil {
+		appLog("SSE SKIP - client disconnected before completion")
+		return
+	}
 
 	safeSSE(w, flusher, ProgressEvent{
 		Type:            "complete",

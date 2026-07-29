@@ -373,21 +373,71 @@ function saveProxyPath() {
 var runStartTime = 0;
 
 function formatETA(ms) {
-  if (ms <= 0) return '—';
+  if (ms <= 0 || !isFinite(ms)) return '—';
   var s = Math.ceil(ms / 1000);
   if (s < 60) return s + 's';
   var m = Math.floor(s / 60); s = s % 60;
   if (m < 60) return m + 'm ' + s + 's';
   var h = Math.floor(m / 60); m = m % 60;
-  return h + 'h ' + m + 'm';
+  if (h < 24) return h + 'h ' + m + 'm';
+  var d = Math.floor(h / 24); h = h % 24;
+  return d + 'd ' + h + 'h';
 }
 
+// Moving average ETA with weighted recent samples
+var etaSamples = [];
+var etaLastUpdate = 0;
+
 function updateETA(processed, total) {
-  if (processed <= 0) { document.getElementById('etaTimer').textContent = '—'; return; }
-  var elapsed = Date.now() - runStartTime;
-  var rate = processed / elapsed;
-  var remaining = (total - processed) / rate;
+  if (processed <= 0) {
+    document.getElementById('etaTimer').textContent = '—';
+    document.getElementById('etaElapsed').textContent = '0s';
+    document.getElementById('etaSpeed').textContent = '0 files/s';
+    return;
+  }
+
+  var now = Date.now();
+  var elapsed = now - runStartTime;
+
+  // Sample every 500ms to avoid noise
+  if (now - etaLastUpdate >= 500 || etaSamples.length === 0) {
+    etaSamples.push({ time: now, processed: processed });
+    // Keep last 20 samples (10 seconds of data)
+    if (etaSamples.length > 20) etaSamples.shift();
+    etaLastUpdate = now;
+  }
+
+  // Calculate rate from recent samples (weighted average)
+  var rate = 0;
+  if (etaSamples.length >= 2) {
+    var recentWeight = 0;
+    var weightedSum = 0;
+    for (var i = 1; i < etaSamples.length; i++) {
+      var dt = etaSamples[i].time - etaSamples[i-1].time;
+      var dp = etaSamples[i].processed - etaSamples[i-1].processed;
+      if (dt > 0) {
+        var instantRate = dp / dt;
+        var weight = i; // More recent = higher weight
+        weightedSum += instantRate * weight;
+        recentWeight += weight;
+      }
+    }
+    if (recentWeight > 0) {
+      rate = weightedSum / recentWeight;
+    }
+  }
+
+  // Fallback to overall average if no recent samples
+  if (rate <= 0 && elapsed > 0) {
+    rate = processed / elapsed;
+  }
+
+  var remaining = rate > 0 ? (total - processed) / rate : 0;
+  var filesPerSec = rate * 1000;
+
   document.getElementById('etaTimer').textContent = formatETA(remaining);
+  document.getElementById('etaElapsed').textContent = formatETA(elapsed);
+  document.getElementById('etaSpeed').textContent = filesPerSec.toFixed(1) + ' files/s';
 }
 
 async function startRun() {
@@ -396,6 +446,8 @@ async function startRun() {
   if (!config.filters.length) { alert('No filters configured. Add at least one target domain.'); return; }
 
   runStartTime = Date.now();
+  etaSamples = [];
+  etaLastUpdate = 0;
   document.getElementById('startRunBtn').disabled = true;
   document.getElementById('startRunBtn').innerHTML = 'Processing...';
   document.getElementById('runProgressPanel').style.display = 'block';
@@ -489,7 +541,6 @@ function renderRunComplete(data) {
     '<div class="summary-row"><span class="label">Total cookies</span><span class="value">' + data.total_cookies + '</span></div>' +
     '<div class="summary-row"><span class="label">Total hits</span><span class="value">' + data.total_hits + '</span></div>' +
     checkHtml +
-    msHtml +
     '<div class="summary-row"><span class="label">Errors</span><span class="value">' + data.errors + '</span></div>' +
     '<div class="summary-row"><span class="label">Time</span><span class="value">' + data.elapsed_seconds.toFixed(1) + 's</span></div>' +
     '<div class="summary-row"><span class="label">Output</span><span class="value" style="font-size:11px;word-break:break-all">' + esc(data.output_dir) + '</span></div>' +
@@ -543,7 +594,6 @@ async function viewRun(runId) {
     '<div class="summary-row"><span class="label">Errors</span><span class="value">' + r.errors + '</span></div>' +
     '<div class="summary-row"><span class="label">Time</span><span class="value">' + r.elapsed_seconds.toFixed(1) + 's</span></div>' +
     '<div class="summary-row"><span class="label">Filters used</span><span class="value">' + (r.filters_used || []).length + '</span></div>' +
-    msHtml +
     domainHtml,
     '<button class="btn btn-primary" onclick="closeModal()">Close</button>'
   );
