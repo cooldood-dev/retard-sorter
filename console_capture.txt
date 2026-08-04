@@ -1,0 +1,19 @@
+============================================================
+  RETARD SORTER v1.9.0
+  Netscape Cookie Sorter & Domain Filter
+============================================================
+
+  Profiles dir: C:\Users\prana\Documents\profiles
+
+  Place your files in: E:\clients\logs-checka\retard-sorter\assets
+    - background.mp4  (fullscreen video background)
+    - logo.gif        (sidebar logo, animated)
+    - logo.png        (fallback if logo.gif missing)
+
+  Server started at  http://127.0.0.1:9734
+  Opening browser...
+
+  Press Ctrl+C to stop the server.
+
+  Log: E:\clients\logs-checka\retard-sorter\retard-sorter.log
+

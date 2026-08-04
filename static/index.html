@@ -24,7 +24,7 @@
         <div id="brandFallbackTop" class="topbar-logo topbar-logo-fallback" style="display:none">RS</div>
         <span class="topbar-title">Retard Sorter</span>
       </a>
-          <span class="topbar-version">v1.6.0</span>
+          <span class="topbar-version">v1.9.0</span>
     </div>
     <div class="topbar-right">
       <span class="credits-pill">
@@ -167,13 +167,50 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
             Proxies
           </button>
+
+          <button class="section-tab" data-section="checker" onclick="switchSection('checker')">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            Checker
+          </button>
         </div>
 
         <div class="section-panel active" id="sec-dir">
           <div class="form-group">
+            <label>Sort mode</label>
+            <p class="form-hint">Cookies: Netscape cookie txt files &middot; ULP: lines of URL : Email : Pass</p>
+            <div class="radio-group" id="sortModeGroup">
+              <label class="radio-item"><input type="radio" name="sortMode" value="cookie" checked onchange="updateSortMode()"><span>Cookies</span></label>
+              <label class="radio-item"><input type="radio" name="sortMode" value="ulp" onchange="updateSortMode()"><span>ULP (url:email:pass)</span></label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="hitsOutputDir">Hits output folder <span class="text-muted">(optional)</span></label>
+            <p class="form-hint">Dumps sorted hits directly into this folder — no date folder, no summary. Leave empty to use the default results folder.</p>
+            <input type="text" id="hitsOutputDir" placeholder="C:\Users\user\output" onchange="saveHitsOutputDir()">
+          </div>
+          <div class="form-group" id="runSourceDirGroup">
             <label for="runSourceDir">Source directory</label>
-            <p class="form-hint">Full path to the folder containing Netscape cookie files</p>
+            <p class="form-hint" id="runSourceHint">Full path to the folder containing Netscape cookie files</p>
             <input type="text" id="runSourceDir" placeholder="C:\Users\user\cookies\input">
+            <label class="toggle-item" style="margin-top:10px">
+              <span class="toggle-info">
+                <span class="toggle-title">Automate all checks</span>
+                <span class="toggle-desc">After sorting, automatically run the Microsoft checker on the hits folder</span>
+              </span>
+              <span class="switch">
+                <input type="checkbox" id="runAutomate">
+                <span class="knob"></span>
+              </span>
+            </label>
+          </div>
+          <div class="form-group" id="ulpFileGroup" style="display:none">
+            <label>ULP file(s)</label>
+            <p class="form-hint">Txt files with one URL : Email : Pass per line. Multiple files allowed.</p>
+            <div style="display:flex;align-items:center;gap:10px">
+              <input type="file" id="ulpFileInput" accept=".txt,text/plain" multiple style="display:none" onchange="updateULPFileLabel()">
+              <button class="btn btn-ghost btn-sm" type="button" onclick="document.getElementById('ulpFileInput').click()">Choose files...</button>
+              <span id="ulpFileLabel" class="text-muted">No file selected</span>
+            </div>
           </div>
         </div>
 
@@ -189,17 +226,102 @@
             </div>
           </div>
           <div class="form-group" id="proxyFileGroup">
-            <label>Proxy file path</label>
-            <p class="form-hint">Full path to a .txt file with one proxy per line (ip:port or ip:port:user:pass)</p>
-            <input type="text" id="proxyFilePath" placeholder="C:\Users\user\proxies.txt" onchange="saveProxyPath()">
+            <label>Proxy file</label>
+            <p class="form-hint">Pick a .txt file with one proxy per line (ip:port or ip:port:user:pass)</p>
+            <div style="display:flex;align-items:center;gap:10px">
+              <input type="file" id="proxyFileInput" accept=".txt,text/plain" style="display:none" onchange="uploadProxyFile(this, 'proxyFileLabel')">
+              <button class="btn btn-ghost btn-sm" type="button" onclick="document.getElementById('proxyFileInput').click()">Choose file...</button>
+              <span id="proxyFileLabel" class="text-muted">No file selected</span>
+            </div>
             <div id="proxyStatus" style="display:none"></div>
+          </div>
+        </div>
+
+        <div class="section-panel" id="sec-checker">
+          <div class="form-group" style="margin-bottom:16px">
+            <label>Checker mode</label>
+            <p class="form-hint">Cookie files: Netscape-format cookie .txt files (one account per file) &middot; ULP: email:pass accounts (one per line)</p>
+            <div class="checker-modes" id="checkerModes">
+              <button type="button" class="mode-card active" id="modeCookie" onclick="setCheckerMode('cookie')">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10c0-1-1-2-2-1-1 1-2 1-3-1-1-2-3-1-2-3 1-1 0-2-1-2-2 0-3-2-2-3 1-1-1-2-2-1z"/><circle cx="9" cy="9" r="1"/><circle cx="14" cy="14" r="1"/></svg>
+                <span class="mode-title">Cookie files</span>
+                <span class="mode-desc">Validate cookie files for Microsoft / Minecraft</span>
+              </button>
+              <button type="button" class="mode-card" id="modeULP" onclick="setCheckerMode('ulp')">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+                <span class="mode-title">ULP accounts</span>
+                <span class="mode-desc">Validate email:pass logins (Game Pass / Minecraft / Mail)</span>
+              </button>
+            </div>
+          </div>
+          <div class="form-group" style="margin-bottom:16px">
+            <div class="toggle-list" id="checkerToggleGroup">
+              <label class="toggle-item">
+                <span class="toggle-info">
+                  <span class="toggle-title">Microsoft Validator</span>
+                  <span class="toggle-desc">Valid Microsoft account</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="checkerMS" checked>
+                  <span class="knob"></span>
+                </span>
+              </label>
+              <label class="toggle-item">
+                <span class="toggle-info">
+                  <span class="toggle-title">Minecraft + MS Validator</span>
+                  <span class="toggle-desc">Valid account that owns Minecraft / Game Pass</span>
+                </span>
+                <span class="switch">
+                  <input type="checkbox" id="checkerMC">
+                  <span class="knob"></span>
+                </span>
+              </label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="checkerSourceDir">Source directory</label>
+            <p class="form-hint" id="checkerSourceHint">Full path to the folder containing cookie .txt files (one account per file)</p>
+            <input type="text" id="checkerSourceDir" placeholder="C:\Users\user\accounts\input">
+          </div>
+          <div class="form-group">
+            <label>Proxy file</label>
+            <p class="form-hint">Pick a .txt file with one proxy per line (ip:port or ip:port:user:pass)</p>
+            <div style="display:flex;align-items:center;gap:10px">
+              <input type="file" id="checkerProxyFileInput" accept=".txt,text/plain" style="display:none" onchange="uploadProxyFile(this, 'checkerProxyFileLabel')">
+              <button class="btn btn-ghost btn-sm" type="button" onclick="document.getElementById('checkerProxyFileInput').click()">Choose file...</button>
+              <span id="checkerProxyFileLabel" class="text-muted">No file selected</span>
+            </div>
+          </div>
+          <button class="btn btn-primary btn-lg" id="startCheckerBtn" onclick="startCheckerRun()" style="width:100%">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            Start checker
+          </button>
+
+          <div class="card" id="checkerProgressPanel" style="display:none;margin-top:16px">
+            <h3 class="card-title">Checker progress</h3>
+            <div class="progress-track"><div class="progress-fill" id="checkerProgressFill"></div></div>
+            <div class="progress-meta">
+              <span id="checkerProgressMeta">0 / 0 accounts</span>
+              <span id="checkerProgressStatus">Initializing...</span>
+            </div>
+            <div class="check-meta">
+              <span id="checkerValid" class="valid">0 valid MS</span>
+              <span id="checkerMCValid" class="valid">0 valid MC</span>
+              <span id="checkerInvalid" class="invalid">0 invalid</span>
+            </div>
           </div>
         </div>
       </div>
 
       <div class="card">
         <div class="form-group" style="margin-bottom:16px">
-          <label>Active filters</label>
+          <div class="filter-toolbar" style="margin-bottom:10px">
+            <label style="font-size:14px">Active filters</label>
+            <div class="filter-toolbar-actions">
+              <button class="btn btn-primary btn-sm" onclick="showAddFilterModal()">Add domain</button>
+              <button class="btn btn-ghost btn-sm" onclick="clearAllFilters()" id="runClearFiltersBtn" style="display:none">Clear all</button>
+            </div>
+          </div>
           <div id="runFilterSummary" class="tag-list"></div>
         </div>
         <button class="btn btn-primary btn-lg" id="startRunBtn" onclick="startRun()" style="width:100%">
@@ -252,10 +374,122 @@
       </div>
     </section>
 
+    <!-- CONVERTOR -->
+    <section id="page-converter" class="page">
+      <div class="page-heading">
+        <h1>Convertor</h1>
+        <p class="page-subtext">Convert email:pass accounts into Microsoft cookie files via headless browser login</p>
+      </div>
+
+      <div class="card">
+        <div class="form-group">
+          <label>Account list</label>
+          <p class="form-hint">Txt file with one email:pass per line. Uploaded to the server and used for every run.</p>
+          <div style="display:flex;align-items:center;gap:10px">
+            <input type="file" id="convertInputFile" accept=".txt,text/plain" style="display:none" onchange="uploadConvertInput(this)">
+            <button class="btn btn-ghost btn-sm" type="button" onclick="document.getElementById('convertInputFile').click()">Choose file...</button>
+            <span id="convertInputLabel" class="text-muted">No file selected</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="form-group" style="margin-bottom:16px">
+          <label for="convertConcurrency">Workers</label>
+          <p class="form-hint">Parallel accounts (1-50). HTTP logins are I/O-bound; 25-50 is safe on a 2-core machine.</p>
+          <input type="number" id="convertConcurrency" min="1" max="50" value="25" style="max-width:120px">
+        </div>
+        <div class="form-group" style="margin-bottom:16px">
+          <label for="convertPrefix">Cookie file prefix</label>
+          <p class="form-hint">Generated files look like &lt;prefix&gt;_&lt;random&gt;.txt</p>
+          <input type="text" id="convertPrefix" value="retard" style="max-width:200px">
+        </div>
+        <div class="form-group" style="margin-bottom:16px">
+          <label for="convertBrowserPath">Browser path (optional)</label>
+          <p class="form-hint">Only used as a fallback for captcha / bot-check pages. Leave empty to auto-detect Chrome/Edge.</p>
+          <input type="text" id="convertBrowserPath" placeholder="C:\Program Files\Google\Chrome\Application\chrome.exe">
+        </div>
+        <label class="toggle-item" style="margin-bottom:16px">
+          <span class="toggle-info">
+            <span class="toggle-title">Validate sessions</span>
+            <span class="toggle-desc">Verify each converted session with Microsoft (slower, safer). Off = pure conversion speed</span>
+          </span>
+          <span class="switch">
+            <input type="checkbox" id="convertValidate" checked>
+            <span class="knob"></span>
+          </span>
+        </label>
+        <div class="form-group" style="margin-bottom:16px">
+          <label>Proxy file</label>
+          <p class="form-hint">Rotated across workers. Uses the same uploaded proxy file as the checker.</p>
+          <div style="display:flex;align-items:center;gap:10px">
+            <input type="file" id="convertProxyFileInput" accept=".txt,text/plain" style="display:none" onchange="uploadProxyFile(this, 'convertProxyFileLabel')">
+            <button class="btn btn-ghost btn-sm" type="button" onclick="document.getElementById('convertProxyFileInput').click()">Choose file...</button>
+            <span id="convertProxyFileLabel" class="text-muted">No file selected</span>
+          </div>
+        </div>
+        <label class="toggle-item" style="margin-bottom:16px">
+          <span class="toggle-info">
+            <span class="toggle-title">Proxyless (direct)</span>
+            <span class="toggle-desc">Connect from this machine directly, ignoring the proxy file. Only if your IP is not rate-limited by Microsoft</span>
+          </span>
+          <span class="switch">
+            <input type="checkbox" id="convertProxyless">
+            <span class="knob"></span>
+          </span>
+        </label>
+        <label class="toggle-item" style="margin-bottom:16px">
+          <span class="toggle-info">
+            <span class="toggle-title">Dry run</span>
+            <span class="toggle-desc">Parse and count the account list only, without launching a browser</span>
+          </span>
+          <span class="switch">
+            <input type="checkbox" id="convertDryRun">
+            <span class="knob"></span>
+          </span>
+        </label>
+        <div style="display:flex;gap:10px">
+          <button class="btn btn-primary btn-lg" id="startConvertBtn" onclick="startConvertRun()" style="flex:1">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
+            Start conversion
+          </button>
+          <button class="btn btn-ghost btn-lg" id="stopConvertBtn" onclick="stopConvertRun()" style="display:none">Stop</button>
+        </div>
+
+        <div class="card" id="convertProgressPanel" style="display:none;margin-top:16px">
+          <h3 class="card-title">Conversion progress</h3>
+          <div class="progress-track"><div class="progress-fill" id="convertProgressFill"></div></div>
+          <div class="progress-meta">
+            <span id="convertProgressMeta">0 / 0 accounts</span>
+            <span id="convertProgressStatus">Initializing...</span>
+          </div>
+          <div class="check-meta" id="convertCounters" style="flex-wrap:wrap">
+            <span id="convertSuccess" class="valid">0 converted</span>
+            <span id="convertMFA" class="valid">0 MFA</span>
+            <span id="convertInvalid" class="invalid">0 invalid</span>
+            <span id="convertLocked" class="invalid">0 locked</span>
+            <span id="convertCaptcha" class="invalid">0 captcha</span>
+            <span id="convertFailed" class="invalid">0 failed</span>
+          </div>
+          <div class="eta-card">
+            <span>Current: </span><span id="convertCurrent">—</span>
+            <span class="eta-sep">|</span>
+            <span>Speed: </span><span id="convertRate">0/min</span>
+            <span class="eta-sep">|</span>
+            <span>ETA: </span><span id="convertETA">—</span>
+          </div>
+        </div>
+
+        <div class="card" id="convertResultPanel" style="display:none;margin-top:16px">
+          <h3 class="card-title">Conversion complete</h3>
+          <div id="convertSummary" class="summary-block"></div>
+        </div>
+      </div>
+    </section>
+
   </main>
 
-  <!-- BOTTOM DOCK -->
-  <div id="dock">
+  <!-- BOTTOM DOCK -->  <div id="dock">
     <div class="dock-inner">
       <div class="dock-item active" data-page="dashboard" title="Dashboard">
         <div class="dock-icon">
@@ -283,6 +517,13 @@
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
         </div>
         <span class="dock-label">History</span>
+        <div class="dock-dot"></div>
+      </div>
+      <div class="dock-item" data-page="converter" title="Convertor">
+        <div class="dock-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
+        </div>
+        <span class="dock-label">Convertor</span>
         <div class="dock-dot"></div>
       </div>
     </div>

@@ -5,3 +5,7 @@ build/
 *.exe
 retard-sorter-v*
 retard-sorter.log
+supabase.env
+.session.enc
+.license.enc
+supabase.env.enc

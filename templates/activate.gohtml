@@ -1,0 +1,38 @@
+{{define "activate"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Activate License</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0A0A0B;color:#E8E8ED;font-family:'Segoe UI',system-ui,sans-serif;padding:24px}
+  .card{width:100%;max-width:400px;background:#121215;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:32px}
+  h1{font-size:1.1rem;margin-bottom:6px}
+  .sub{color:#888;font-size:.875rem;margin-bottom:20px}
+  label{display:block;font-size:.8125rem;margin-bottom:6px;color:#aaa}
+  input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.1);background:#0e0e11;color:#E8E8ED;font:inherit}
+  input:focus{outline:none;border-color:#d97706}
+  button{margin-top:16px;width:100%;padding:10px;border:none;border-radius:8px;background:#d97706;color:#0A0A0B;font:inherit;font-weight:600;cursor:pointer}
+  .msg{margin-top:16px;font-size:.8125rem;line-height:1.5}
+  .msg.error{color:#fca5a5}
+  .msg.ok{color:#86efac}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Activate License</h1>
+    <p class="sub">Enter your license key to activate this installation.</p>
+    {{if .Error}}<p class="msg error">{{.Error}}</p>{{end}}
+    {{if .Message}}<p class="msg ok">{{.Message}}</p>{{end}}
+    <form method="POST" action="/activate" autocomplete="off">
+      <label for="license_key">License key</label>
+      <input id="license_key" name="license_key" type="text" required
+             autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX">
+      <button type="submit">Activate</button>
+    </form>
+  </div>
+</body>
+</html>
+{{end}}
